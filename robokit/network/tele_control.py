@@ -18,9 +18,13 @@ class BaseController:
         pygame.init()
         pygame.joystick.init()
 
+        self.screen = pygame.display.set_mode((800, 600))
+        pygame.display.set_caption("TCP Data Visualization")
+
         self.robot = robot
         self.linear_scale = 0.1
         self.angular_scale = 0.1
+        self.fps = 5
 
         # Dynamic
         self.xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
@@ -42,45 +46,80 @@ class BaseController:
 
     def start(self):
         self.game_state = GameState.RUNNING
+        toggle_flag = False
+        last_game_time = pygame.time.get_ticks()
+
         while self.game_state != GameState.STOPPED:
+            # Joystick FPS
+            current_time = pygame.time.get_ticks()
+            self.screen.fill((255, 255, 255))
+
             for event in pygame.event.get():
-                time.sleep(0)
+                if event.type == pygame.JOYBUTTONDOWN:
+                    if event.button == self.get_pause_button() and not toggle_flag:
+                        self.switch_pause()
+                        toggle_flag = True  # 状态切换后标记为已切换
+                elif event.type == pygame.JOYBUTTONUP:
+                    if event.button == self.get_pause_button():
+                        toggle_flag = False  # 当按钮释放时允许再次切换
 
             self.update_state()
             self.update_xyz()
             self.update_g()
 
-            # print('[DEBUG]', self.robot.Pose, self.robot.State)
+            # DEBUG
+            # print("[DEBUG] tcp position (m):", self.robot.get_tcp_coordinates())
+            # print("[DEBUG] tcp linear_jog (m):", self.robot.message_linear_jog)
+            #
+            # print("[DEBUG] tcp orientation (radius):", self.robot.get_tcp_orientation('euler'))
+            # print("[DEBUG] tcp orientation (360):", self.robot.get_tcp_orientation('euler_degree'))
+            # print("[DEBUG] tcp angular_jog (radius):", self.robot.message_angular_jog)
+            #
+            # print("[DEBUG] tcp gripper_action (binary):", self.robot.get_gripper_message())
+            # print("[DEBUG] gripper opening width (100%):", self.robot.get_gripper_opening_width())
+            #
+            # print("[DEBUG] arm_joint_states (radius):", self.robot.get_joint_angles())
+            # print("[DEBUG] arm_joint_states (360):", self.robot.get_joint_angles('degree'))
+            # print("===" * 20)
 
-            # Check Paused
-            if self.is_pause_pressed():
-                self.on_pause()
-            if self.game_state == GameState.PAUSED:
-                continue
+            start_y = 50
+            self.debug_add_bar('tcp linear_jog x (m):', self.robot.message_linear_jog['x'], pos_y=start_y)
+            start_y += 50
+            self.debug_add_bar('tcp linear_jog y (m):', self.robot.message_linear_jog['y'], pos_y=start_y)
+            start_y += 50
+            self.debug_add_bar('tcp linear_jog z (m):', self.robot.message_linear_jog['z'], pos_y=start_y)
 
             # Check Exit
             if self.is_exit_pressed():
                 self.game_state = GameState.STOPPED
 
-            # Check Back Home
-            if self.is_back_pressed():
-                self.on_back_home()
+            if current_time - last_game_time >= 1000 / self.fps:
+                # Robot FPS
+                last_game_time = current_time
 
-            # Check XYZ Move
-            if self.is_linear_jog_pressed():
-                self.on_linear_jog()
-            elif self.is_angular_jog_pressed():
-                self.on_angular_jog()
-            else:
-                self.xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
-                self.on_linear_jog()
-                self.on_angular_jog()
+                if self.game_state == GameState.PAUSED:
+                    pass
+                else:
+                    # Check Back Home
+                    if self.is_back_pressed():
+                        self.on_back_home()
 
-            # Check Gripper
-            self.on_gripper_move()
+                    # Check XYZ Move
+                    if self.is_linear_jog_pressed():
+                        self.on_linear_jog()
+                    elif self.is_angular_jog_pressed():
+                        self.on_angular_jog()
+                    else:
+                        self.xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+                        self.on_linear_jog()
+                        self.on_angular_jog()
+
+                    # Check Gripper
+                    self.on_gripper_move()
 
             # Framerate setting
             pygame.time.Clock().tick(60)
+            pygame.display.flip()
 
         print("Program Exiting due to Exit Pressed")
         self.on_before_exit()
@@ -88,6 +127,24 @@ class BaseController:
         pygame.quit()
         self.robot.arm_power_off()
         self.on_after_exit()
+
+    def debug_add_bar(self, label, value,
+                      pos_x=50, pos_y=50,
+                      min_value=-1, max_value=1,
+                      bar_width=300, bar_height=30,
+                      ):
+        screen = self.screen
+        WHITE = (255, 255, 255)
+        GREEN = (0, 255, 0)
+        RED = (255, 0, 0)
+        BLUE = (0, 0, 255)
+        progress = (value - min_value) / (max_value - min_value)
+        pygame.draw.rect(screen, RED, (pos_x, pos_y, bar_width, bar_height))
+        pygame.draw.rect(screen, GREEN,
+                         (pos_x, pos_y, progress * bar_width, bar_height))
+        font = pygame.font.Font(None, 36)
+        text = font.render(f"{label}: {value:.2f}", True, BLUE)
+        screen.blit(text, (pos_x + bar_width + 20, pos_y + 5))
 
     @abstractmethod
     def update_state(self) -> None: pass
@@ -101,7 +158,7 @@ class BaseController:
     @abstractmethod
     def is_back_pressed(self) -> bool: pass
     @abstractmethod
-    def is_pause_pressed(self) -> bool: pass
+    def get_pause_button(self) -> int: pass
     @abstractmethod
     def is_linear_jog_pressed(self) -> bool: pass
     @abstractmethod
@@ -113,7 +170,8 @@ class BaseController:
     def on_back_home(self) -> None:
         self.robot.joint_back_home()
 
-    def on_pause(self) -> None:
+    def switch_pause(self) -> None:
+        print("Switching Game State")
         # Switch state between RUNNING and PAUSED
         if self.game_state == GameState.RUNNING:
             self.game_state = GameState.PAUSED
@@ -195,8 +253,8 @@ class SwitchProController(BaseController):
     def is_back_pressed(self):
         return self.joystick.get_button(0)
 
-    def is_pause_pressed(self):
-        return self.joystick.get_button(10)
+    def get_pause_button(self):
+        return 10  # button number
 
     def is_linear_jog_pressed(self):
         return self.joystick.get_button(6)

@@ -4,6 +4,9 @@ import time
 from typing import List, Union, Dict
 from enum import Enum
 import math
+import copy
+
+from scipy.spatial.transform import Rotation
 
 import roslibpy
 import roslibpy.actionlib
@@ -33,6 +36,7 @@ class RobotClient:
             'reached_goal': True,
             'position': 1.,
             'state': GripperState.INIT,  # managed by ourselves
+            'message': 0.,  # 0:open, 1:close
         }
 
         # SUBSCRIBING TO TCP SPEED ON ROS
@@ -92,6 +96,8 @@ class RobotClient:
 
         #### Motion ####
         self.joint_names = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
+        self.message_linear_jog: dict = {'x': 0, 'y':0, 'z': 0}
+        self.message_angular_jog: dict = {'x': 0, 'y':0, 'z': 0}
 
     #### TOPIC FUNCTIONS ####
     def gripper_status(self, message):
@@ -120,11 +126,20 @@ class RobotClient:
         self.Pose['Ori']['z'] = message['pose']['orientation']['z']
         self.Pose['Ori']['w'] = message['pose']['orientation']['w']
 
-    def get_tcp_coordinates(self):  # get_tcpCoordinates()
+    def get_tcp_coordinates(self):
+        """ TCP xyz (m) """
         return self.Pose['Coords']
 
-    def get_tcp_orientation(self):  # get_Orient()
-        return self.Pose['Ori']
+    def get_tcp_orientation(self, out_type: str = 'euler'):
+        """ TCP orientation """
+        if out_type == 'quaternion':
+            return self.Pose['Ori']  # (quaternion)
+        elif 'euler' in out_type:
+            quaternion = [self.Pose['Ori']['x'], self.Pose['Ori']['y'], self.Pose['Ori']['z'], self.Pose['Ori']['w']]
+            rotation = Rotation.from_quat(quaternion)
+            is_degree = 'degree' in out_type
+            euler_angles = rotation.as_euler('xyz', degrees=is_degree)
+            return euler_angles  # (euler)
 
     def joint_states(self, message):
         jointNum = len(message['position'])  # Number of joints from the ROS dictionary
@@ -140,8 +155,11 @@ class RobotClient:
             self.State['vel'][x] = message['velocity'][x]
             self.State['eff'][x] = message['effort'][x]
 
-    def get_joint_angles(self):  # get_joint_angles()[angle_num] or get_JointAngles() to get an array of them
-        return self.State['pos']
+    def get_joint_angles(self, out_type='radius'):  # get_joint_angles()[angle_num] or get_JointAngles() to get an array of them
+        if 'radius' in out_type:
+            return self.State['pos']
+        elif 'degree' in out_type:
+            return [x * 180 / math.pi for x in self.State['pos']]
 
     def get_joint_velocity(self):
         return self.State['vel']
@@ -259,6 +277,7 @@ class RobotClient:
     ## angular jog causes a rotation of the TCP
     def linear_jog_pub(self, message):
         client = self._ros
+        self.message_linear_jog = message
         publisher = roslibpy.Topic(
             client, '/default_move_group/cartesian_jog',
             'commander_msgs/CartesianJogDemand')
@@ -266,6 +285,7 @@ class RobotClient:
 
     def ang_jog_pub(self, message: dict):
         client = self._ros
+        self.message_angular_jog = message
         publisher = roslibpy.Topic(
             client, '/default_move_group/cartesian_jog',
             'commander_msgs/CartesianJogDemand')
@@ -289,6 +309,8 @@ class RobotClient:
                         message: float):  # message:0-open, 1-close
         """ message: 0: To Open; 1: To Close """
         client = self._ros
+        self.gripper['message'] = message
+
         DIST_EPS = 0.01
         POS_MAX = 0.99
         POS_MIN = 0.01
@@ -342,6 +364,13 @@ class RobotClient:
                 self._send_gripper_action(action=0)
                 self.gripper['state'] = GripperState.MOVING_TO_CLOSE
         return
+
+    def get_gripper_message(self):
+        """ 0:Open; 1:Close """
+        return self.gripper['message']  # binary, in {0,1}
+
+    def get_gripper_opening_width(self):
+        return self.gripper['position']  # ratio, in [0,1]
 
     #### MOTION CONTROL ####
     def joint_goal_send(self, positions: List[float],

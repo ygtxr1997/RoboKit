@@ -16,6 +16,7 @@ dependencies = [
     "pygame",
     "roslibpy",
     "requests",
+    "scipy",
 ]
 
 # 配置项目的分类（适用于 PyPI）
