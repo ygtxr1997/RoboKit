@@ -3,22 +3,18 @@
 requires = ["setuptools>=42", "twine"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
+[project]
 # 设置项目名称、版本和作者等信息
 name = "robokit"
 version = "0.1.0"
 description = "A simple robot toolkit"
-author = "Your Name"
-author_email = "your.email@example.com"
-url = "https://github.com/yourusername/robokit"
-
-# 配置包发现（例如，自动包含 robokit 目录下的所有模块）
-packages = ["robokit"]
-
-# 配置项目的依赖项
-[tool.setuptools.dependencies]
-install_requires = [
-    "numpy",
+authors = [
+    { name = "Ge Yuan", email = "gavinyuan97@gmail.com" }
+]
+dependencies = [
+    "pyrealsense2",
+    "pygame",
+    "roslibpy",
     "requests",
 ]
 
@@ -29,9 +25,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-# Python 版本要求
-python_requires = ">=3.6"
-
 [tool.setuptools.packages.find]
 # 自动查找所有包，包含 robokit 目录下的所有模块
-where = ["robokit"]
+where = ["."]
+exclude = ["tests"]

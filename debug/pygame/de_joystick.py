@@ -151,6 +151,7 @@ if __name__ == "__main__":
     pygame.quit()
 
     """
+    XBox MacOSX
     十字上下左右: 11, 12, 13, 14
     A, B, X, Y:  0,  1,  2,  3
     LB, RB:      9, 10,
@@ -158,4 +159,24 @@ if __name__ == "__main__":
     screen:      4
     menu:        6
     share:      15
+    
+    XBox Ubuntu
+    Left Stick 0639: 1, 1, 0, 0
+    Right Stick 0639:   3, 3, 2, 2
+    A, B, X, Y:  0,  1,  3,  4
+    LB, RB:      6,  7,
+    LT, RT:     A5, A4,
+    screen:     10
+    menu:       11
+    share:      15
+    
+    SwitchPro Ubuntu
+    Left Stick 0639:    A1, A1, A0, A0
+    Right Stick 0639:   A3, A3, A2, A2            
+    A, B, X, Y:          1,  0,  2,  3
+    LB/L, RB/R:          5,  6,             
+    LT/ZL, RT/ZR:        7,  8,            
+    screen:              4,
+    menu:               10,
+    share:               9,
     """
