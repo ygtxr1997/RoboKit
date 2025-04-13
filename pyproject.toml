@@ -12,11 +12,14 @@ authors = [
     { name = "Ge Yuan", email = "gavinyuan97@gmail.com" }
 ]
 dependencies = [
-    "pyrealsense2",
+#    "pyrealsense2",  # for camera
     "pygame",
     "roslibpy",
     "requests",
     "scipy",
+    "tqdm",
+    "uvicorn",
+#    "gradio",
 ]
 
 # 配置项目的分类（适用于 PyPI）
