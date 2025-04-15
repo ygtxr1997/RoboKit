@@ -20,6 +20,7 @@ dependencies = [
     "tqdm",
     "uvicorn",
 #    "gradio",
+    "torch~=2.1.0",
 ]
 
 # 配置项目的分类（适用于 PyPI）

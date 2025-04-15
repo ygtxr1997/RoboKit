@@ -39,6 +39,14 @@ class RobotClient:
             'message': 0.,  # 0:open, 1:close
         }
 
+        # SUBSCRIBING to DEBUG info
+        self.debug_listener = roslibpy.Topic(
+            self._ros, "/default_move_group/move/result", 'commander_msgs/MotionActionResult'
+        )
+        def debug_printer(message):
+            print(message)
+        self.debug_listener.subscribe(debug_printer)
+
         # SUBSCRIBING TO TCP SPEED ON ROS
         self.tcp_speed_client = roslibpy.Topic(self._ros, '/default_move_group/tcp_speed',
                                                'commander_msgs/SpeedStamped')

@@ -53,6 +53,12 @@ On Windows, double-click the `.exe` file:
 P2PSocket.StartUp_Windows.exe
 ```
 
+On some Linux systems, you may need to set this before running the P2P program:
+
+```shell
+$ export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+```
+
 ### 4. (Optional) Start the P2P Program on Server
 
 As the **client user**, you do NOT need to set this.

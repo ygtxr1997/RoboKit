@@ -15,7 +15,8 @@ class GameState(enum.Enum):
 
 class BaseController:
     def __init__(self, robot: RobotClient):
-        pygame.init()
+        pygame.font.init()
+        pygame.display.init()
         pygame.joystick.init()
 
         self.screen = pygame.display.set_mode((800, 600))
