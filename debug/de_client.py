@@ -1,22 +1,23 @@
-import socket
+import time
 
-def start_client(host='192.168.1.56', port=50003):
-    # 创建一个客户端套接字
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
-    # 连接到服务器
-    client_socket.connect((host, port))
+import roslibpy
 
-    # 发送消息
-    message = "Hello, Server!"
-    client_socket.sendall(message.encode())
+from robokit.network.robot_client import RobotClient
 
-    # 接收服务器的响应
-    response = client_socket.recv(1024)
-    print(f"Received from server: {response.decode()}")
 
-    # 关闭连接
-    client_socket.close()
+robot_ip = '192.168.1.7'
+client = roslibpy.Ros(host=robot_ip, port=9090) # Change host to the IP of the robot
+client.run()
 
-if __name__ == "__main__":
-    start_client()
+# Sanity check to see if we are connected
+print('Verifying the ROS target is connected?', client.is_connected)
+
+rc = RobotClient(client)
+
+time.sleep(1)
+
+for _ in range(10000000):
+    rc.get_current_frame_info()
+    time.sleep(0.1)
+
+print("OK!")

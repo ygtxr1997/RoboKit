@@ -3,6 +3,7 @@ from __future__ import print_function
 import time
 from typing import List, Union, Dict
 from enum import Enum
+import pprint
 import math
 import copy
 
@@ -18,6 +19,11 @@ class GripperState(Enum):
     MOVING_TO_OPEN = 2
     REACHED_CLOSE = 3
     MOVING_TO_CLOSE = 4
+
+    # STATE_ZERO = [0, 1, 2]  # open
+    # STATE_ONE = [3, 4]  # close
+    STATE_ZERO = [INIT, REACHED_OPEN, MOVING_TO_OPEN]  # open
+    STATE_ONE = [REACHED_CLOSE, MOVING_TO_CLOSE]  # close
 
 
 class RobotClient:
@@ -139,7 +145,9 @@ class RobotClient:
         return self.Pose['Coords']
 
     def get_tcp_orientation(self, out_type: str = 'euler'):
-        """ TCP orientation """
+        """ TCP orientation
+        Supported out_type: ['euler', 'quaternion', 'euler_degree']
+        """
         if out_type == 'quaternion':
             return self.Pose['Ori']  # (quaternion)
         elif 'euler' in out_type:
@@ -148,6 +156,8 @@ class RobotClient:
             is_degree = 'degree' in out_type
             euler_angles = rotation.as_euler('xyz', degrees=is_degree)
             return euler_angles  # (euler)
+        else:
+            raise NotImplementedError
 
     def joint_states(self, message):
         jointNum = len(message['position'])  # Number of joints from the ROS dictionary
@@ -428,3 +438,29 @@ class RobotClient:
         home_joint_positions = [0, 0, pi / 2,
                                 0, pi / 2, pi]
         self.joint_goal_send(home_joint_positions)
+
+    #### Data related ####
+    @staticmethod
+    def beautify_print(d):
+        """使用 pprint 库格式化打印字典"""
+        pp = pprint.PrettyPrinter(indent=4)
+        pp.pprint(d)
+
+    def get_current_frame_info(self):
+        if self.gripper['state'].value in GripperState.STATE_ZERO.value:
+            gripper_moving_to = 0
+        else:
+            assert self.gripper['state'].value in GripperState.STATE_ONE.value
+            gripper_moving_to = 1
+
+        data_dict = {
+            "tcp_xyz_wrt_base": self.get_tcp_coordinates(),
+            "tcp_ori_wrt_base": self.get_tcp_orientation(out_type='euler_radius'),
+            "gripper_moving_to": gripper_moving_to,
+            "jog_linear": self.message_linear_jog,
+            "jog_angular": self.message_angular_jog,
+            "gripper_width": self.gripper['position'],
+            "joint_states": self.get_joint_angles(out_type='radius'),
+        }
+
+        self.beautify_print(data_dict)
