@@ -394,7 +394,7 @@ class RobotClient:
     def joint_goal_send(self, positions: List[float],
                         velocities: List[float] = None,
                         seconds_from_start: float = 10,
-                        timeout: float = 30,
+                        timeout: float = 60,
                         ):
         if velocities is None:
             velocities = [0.02] * len(positions)
@@ -433,11 +433,58 @@ class RobotClient:
         action_client.dispose()
         print("[DEBUG] joint_goal finished!...")
 
+    def tcp_goal_send(self, tcp_pos: dict, tcp_ori: dict,
+                      timeout: float = 60):
+        motion_goal_settings = {  # Dictionary in case of simple motion
+            'pose': {
+                'position': tcp_pos,  # {'x','y','z'}
+                'orientation': tcp_ori ,  # {'x','y','z','w'}
+            },
+            'frame_id': 'world',  # Default frame
+            'max_velocity': {'linear': 0.05,  ## Default velocities
+                             'angular': 0.05},
+            'max_joint_velocity': 0.05,
+            'max_joint_acceleration': 0.05,
+            'blend': {'linear': 0.0,
+                      'angular': 0.0
+                      }
+        }
+        goal_info = [motion_goal_settings]
+
+        service = roslibpy.Service(
+            self._ros, '/robot/switch_controller', 'inovo_driver/SwitchControllerGroup')
+        request = roslibpy.ServiceRequest({'name': 'trajectory'})
+        result = service.call(request)
+
+        action_client = roslibpy.actionlib.ActionClient(
+            self._ros, '/default_move_group/move',
+            'commander_msgs/MotionAction')
+
+        message_ = {
+            'motion_sequence': goal_info}  ## Creating a dictionary that looks the same as the simple motion
+
+        goal = roslibpy.actionlib.Goal(action_client, roslibpy.Message(message_))
+        # goal.on('feedback', lambda f: print(f))
+        goal.on("feedback", lambda f: print(f))
+        ## Start the goal - this is where the robot will start moving!
+        goal.send()
+
+        print("[DEBUG] waiting for tcp_goal...")
+        result = goal.wait(timeout)
+        action_client.dispose()
+        print("[DEBUG] tcp_goal finished!...")
+
     def joint_back_home(self):
         pi = math.pi
         home_joint_positions = [0, 0, pi / 2,
                                 0, pi / 2, pi]
         self.joint_goal_send(home_joint_positions)
+
+    def tcp_back_home(self):
+        """ More safe comparing with joint_back_home """
+        home_tcp_pos = {'x': 0.0, 'y': 0.4, 'z': 0.4567}
+        home_tcp_ori = {'x': 1, 'y': 0, 'z': 0, 'w': 0}
+        self.tcp_goal_send(home_tcp_pos, home_tcp_ori)
 
     #### Data related ####
     @staticmethod
@@ -446,7 +493,7 @@ class RobotClient:
         pp = pprint.PrettyPrinter(indent=4)
         pp.pprint(d)
 
-    def get_current_frame_info(self):
+    def get_current_frame_info(self, verbose=False):
         if self.gripper['state'].value in GripperState.STATE_ZERO.value:
             gripper_moving_to = 0
         else:
@@ -463,4 +510,7 @@ class RobotClient:
             "joint_states": self.get_joint_angles(out_type='radius'),
         }
 
-        self.beautify_print(data_dict)
+        if verbose:
+            self.beautify_print(data_dict)
+
+        return data_dict

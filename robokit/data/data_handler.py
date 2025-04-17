@@ -7,7 +7,20 @@ import os
 
 class DataHandler:
     def __init__(self, data_dict: dict):
-        """初始化 DataHandler"""
+        """初始化 DataHandler
+        Example:
+        data_dict = {
+            "primary_rgb": (np.random.randn(img_h, img_w, 3) * 255).astype(np.uint8),
+            "gripper_rgb": (np.random.randn(img_h, img_w, 3) * 255).astype(np.uint8),
+            "primary_depth": (np.random.randn(img_h, img_w) * 255).astype(np.float32),
+            "gripper_depth": (np.random.randn(img_h, img_w) * 255).astype(np.float32),
+            "language_text": np.array("None"),
+            "actions": np.random.randn(7),  # (x,y,z,row,pitch,yaw,g)
+            "rel_actions": np.random.randn(7),  # (j_x,j_y,j_z,j_ax,j_ay,j_az,g)
+            "robot_obs": np.random.randn(14),
+            # (tcp pos (3), tcp ori (3), gripper width (1), joint_states (6) in rad, gripper_action (1)
+        }
+        """
         self.data_dict = data_dict
 
         if not self._validate_data(data_dict):
@@ -80,6 +93,8 @@ class DataHandler:
             "rel_actions": np.ndarray,
             "robot_obs": np.ndarray,
         }
+        if isinstance(data_dict['language_text'], str):
+            data_dict['language_text'] = np.array(data_dict['language_text'])
 
         for key, expected_type in expected_keys.items():
             if key not in data_dict:
@@ -119,3 +134,22 @@ class DataHandler:
             pil_image = Image.open(buffer)
         return pil_image
 
+
+class MultiDataHandler:
+    def __init__(self):
+        self.data_queue = []
+        self.save_path_queue = []
+        self.max_data_cnt = 10
+
+    def add_data(self, data_dict: dict, save_path: str):
+        self.data_queue.append(DataHandler(data_dict))
+        self.save_path_queue.append(save_path)
+
+    def save_data(self):
+        if len(self.data_queue) >= self.max_data_cnt:
+            for i in range(len(self.save_path_queue)):
+                self.data_queue[i].save(self.save_path_queue[i])
+            self.data_queue = []
+            self.save_path_queue = []
+        else:
+            return

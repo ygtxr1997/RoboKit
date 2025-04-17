@@ -1,9 +1,14 @@
+import os
 import time
+from datetime import datetime
 import enum
 from abc import ABC, abstractmethod
 import pygame
+import numpy as np
 
 from .robot_client import RobotClient
+from robokit.data.data_handler import DataHandler, MultiDataHandler
+from robokit.data.realsense_handler import RealsenseHandler
 
 
 class GameState(enum.Enum):
@@ -44,6 +49,19 @@ class BaseController:
         time.sleep(0.5)
 
         self.game_state = GameState.INIT
+
+        # Cameras
+        self.camera = RealsenseHandler(frame_rate=30)
+        self.data_manager = MultiDataHandler()
+        self.need_saving = False
+        self.saving_root = "collected_data/"
+        self.saving_dir: str = None
+        self.saving_frame_idx: int = 0
+
+    def get_datetime_str(self):
+        current_time = datetime.now()
+        formatted_time = current_time.strftime("%Y_%m_%d-%H_%M_%S")
+        return formatted_time
 
     def start(self):
         self.game_state = GameState.RUNNING
@@ -90,6 +108,8 @@ class BaseController:
             start_y += 50
             self.debug_add_bar('tcp linear_jog z (m):', self.robot.message_linear_jog['z'], pos_y=start_y)
 
+            # self.robot.get_current_frame_info()
+
             # Check Exit
             if self.is_exit_pressed():
                 self.game_state = GameState.STOPPED
@@ -118,8 +138,73 @@ class BaseController:
                     # Check Gripper
                     self.on_gripper_move()
 
+                    # Check Episode start end
+                    if self.is_start_episode_pressed():
+                        self.on_start_episode()
+                    elif self.is_end_episode_pressed():
+                        self.on_end_episode()
+
+                # Save data
+                if self.need_saving:
+                    assert self.saving_dir is not None
+                    os.makedirs(self.saving_dir, exist_ok=True)
+
+                    start_time = pygame.time.get_ticks()
+                    camera_data = self.camera.capture_frames()
+                    print("[DEBUG] Get camera data cost:", pygame.time.get_ticks() - start_time)
+                    task_instruction = "pick up the banana"
+                    start_time = pygame.time.get_ticks()
+                    robot_data = self.robot.get_current_frame_info()
+                    print("[DEBUG] Get robot data cost:", pygame.time.get_ticks() - start_time)
+
+                    frame_actions = np.array([
+                        robot_data['jog_linear']['x'],
+                        robot_data['jog_linear']['y'],
+                        robot_data['jog_linear']['z'],
+                        robot_data['jog_angular']['x'],
+                        robot_data['jog_angular']['y'],
+                        robot_data['jog_angular']['z'],
+                        robot_data['gripper_moving_to'],
+                    ])
+                    frame_rel_actions = frame_actions  # TODO: using same action space with absolute actions
+                    frame_robot_obs = np.array([
+                        robot_data['tcp_xyz_wrt_base']['x'],
+                        robot_data['tcp_xyz_wrt_base']['y'],
+                        robot_data['tcp_xyz_wrt_base']['z'],
+                        robot_data['tcp_ori_wrt_base'][0],
+                        robot_data['tcp_ori_wrt_base'][1],
+                        robot_data['tcp_ori_wrt_base'][2],
+                        robot_data['gripper_width'],
+                        robot_data['joint_states'][0],
+                        robot_data['joint_states'][1],
+                        robot_data['joint_states'][2],
+                        robot_data['joint_states'][3],
+                        robot_data['joint_states'][4],
+                        robot_data['joint_states'][5],
+                        robot_data['gripper_moving_to'],
+                    ])
+
+                    frame_data_dict = {
+                        "primary_rgb": camera_data['color2'],
+                        "gripper_rgb": camera_data['color1'],
+                        "primary_depth": camera_data['depth2'],
+                        "gripper_depth": camera_data['depth1'],
+                        "language_text": task_instruction,
+                        "actions": frame_actions,
+                        "rel_actions": frame_rel_actions,
+                        "robot_obs": frame_robot_obs,
+                    }
+
+                    save_path = os.path.join(self.saving_dir, f"{self.saving_frame_idx:06d}.npz")
+                    self.data_manager.add_data(frame_data_dict, save_path)
+                    start_time = pygame.time.get_ticks()
+                    self.data_manager.save_data()
+                    print("[DEBUG] Saving data cost:", pygame.time.get_ticks() - start_time)
+                    print("---" * 30)
+                    self.saving_frame_idx += 1
+
             # Framerate setting
-            pygame.time.Clock().tick(60)
+            pygame.time.Clock().tick(120)
             pygame.display.flip()
 
         print("Program Exiting due to Exit Pressed")
@@ -147,6 +232,7 @@ class BaseController:
         text = font.render(f"{label}: {value:.2f}", True, BLUE)
         screen.blit(text, (pos_x + bar_width + 20, pos_y + 5))
 
+    ''' Read information from Robotic Arm '''
     @abstractmethod
     def update_state(self) -> None: pass
     @abstractmethod
@@ -154,6 +240,7 @@ class BaseController:
     @abstractmethod
     def update_g(self) -> None: pass
 
+    ''' Check which buttons are pressed on the Joystick '''
     @abstractmethod
     def is_exit_pressed(self) -> bool: pass
     @abstractmethod
@@ -165,6 +252,14 @@ class BaseController:
     @abstractmethod
     def is_angular_jog_pressed(self) -> bool: pass
 
+    @abstractmethod
+    def is_start_episode_pressed(self) -> bool: pass
+    @abstractmethod
+    def is_end_episode_pressed(self) -> bool: pass
+    @abstractmethod
+    def on_rumble(self) -> None: pass
+
+    ''' Default behavior when some Events are detected '''
     def on_before_exit(self) -> None: pass
     def on_after_exit(self) -> None: pass
 
@@ -196,6 +291,21 @@ class BaseController:
     def on_gripper_move(self, g: float = None) -> None:
         self.g = g if g is not None else self.g
         self.robot.gripper_set_pub(self.g)
+
+    def on_start_episode(self) -> None:
+        self.need_saving = True
+        self.saving_dir = os.path.join(self.saving_root, self.get_datetime_str())
+        self.saving_frame_idx = 0
+        self.on_rumble()
+        print("Episode Started")
+
+    def on_end_episode(self) -> None:
+        self.need_saving = False
+        self.saving_dir = None
+        self.saving_frame_idx = 0
+        print("Episode Ended")
+        self.on_rumble()
+        self.on_back_home()
 
 
 class SwitchProController(BaseController):
@@ -262,6 +372,15 @@ class SwitchProController(BaseController):
 
     def is_angular_jog_pressed(self):
         return self.joystick.get_button(5)
+
+    def is_start_episode_pressed(self) -> bool:
+        return self.joystick.get_button(2)
+
+    def is_end_episode_pressed(self) -> bool:
+        return self.joystick.get_button(3)
+
+    def on_rumble(self) -> None:
+        self.joystick.rumble(0.4, 0.4, 300)
 
 
 class KeyboardController:
