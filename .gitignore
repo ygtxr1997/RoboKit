@@ -172,3 +172,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Third-party P2P tools
+thirdparty/Client_*
+thirdparty/Server_*

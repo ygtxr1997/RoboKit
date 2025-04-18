@@ -3,7 +3,7 @@
 import os
 import roslibpy
 import time
-from inovopy.robot import InovoRobot
+# from inovopy.robot import InovoRobot
 import roslibpy.actionlib
 
 from robot_client import RobotClient
@@ -120,7 +120,15 @@ rc = RobotClient(client)
 coords ={'x': 0.0,
          'y': 0.0,
          'z': 0.0}
-rc.gripper_set_pub(client, 0.)  # Init
+for i in range(30):
+    rc.gripper_set_pub(client, 1.)  # Init
+    time.sleep(0.1)
+for i in range(100):
+    rc.gripper_set_pub(client, 0.)  # Init
+    time.sleep(0.1)
+
+exit()
+
 
 # try:
 #     while True:
@@ -164,8 +172,8 @@ try:
             time.sleep(0)
         #get events from the queue
 
-        coords['x'] = -getJoy(0, joystick)
-        coords['y'] = getJoy(1, joystick)
+        coords['x'] = -getJoy(1, joystick)
+        coords['y'] = getJoy(0, joystick)
         coords['z'] = getJoy(3, joystick)
 
         # print(coords)
@@ -179,22 +187,22 @@ try:
 
         if joystick.get_button(1): # read B to kill the program
             kill = True
-        if joystick.get_button(10): # read RB
+        if joystick.get_button(7): # read RB
             rc.linear_jog_pub(client, coords)
-        if joystick.get_button(9): # read LB
+        if joystick.get_button(6): # read LB
             coords = {
                 'x': -coords['y'] * 3,
-                'y': coords['x'] * 3,
+                'y': -coords['x'] * 3,
                 'z': -coords['z'] * 3,
             }
             rc.ang_jog_pub(client, coords)
-        if not (joystick.get_button(10) or joystick.get_button(9)): # if neither RB or LB are pressed set to zero to avoid drift
+        if not (joystick.get_button(7) or joystick.get_button(6)): # if neither RB or LB are pressed set to zero to avoid drift
             coords['x'] = 0
             coords['y'] = 0
             coords['z'] = 0
             rc.linear_jog_pub(client, coords)
             rc.ang_jog_pub(client, coords)
-        axis_rt = joystick.get_axis(5)  # read RT, init: 0, 1:close, -1:open
+        axis_rt = joystick.get_axis(4)  # read RT, init: 0, 1:close, -1:open
         if axis_rt <= 0:
             axis_rt = 0.  # 0:open, 1:close
         # if axis_rt >= 0.3:
