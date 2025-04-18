@@ -1,3 +1,4 @@
+import warnings
 import numpy as np
 import pickle
 from PIL import Image
@@ -52,26 +53,34 @@ class DataHandler:
         np.savez_compressed(file_path, **pickled_data)
         print(f"数据已保存为 {file_path}")
 
-    def load(self, file_path: str):
+    @classmethod
+    def load(cls, file_path: str):
         """加载 .npz 文件并恢复数据"""
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"{file_path} 文件未找到！")
+        try:
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"{file_path} 文件未找到！")
 
-        # 使用 numpy 加载压缩的 .npz 文件
-        npzfile = np.load(file_path)
+            # 使用 numpy 加载压缩的 .npz 文件
+            npzfile = np.load(file_path)
 
-        data_dict = {}
-        for key in npzfile.files:
-            # 读取并反序列化每个数据项
-            if key in ['primary_rgb', 'gripper_rgb',
-                       'primary_depth', 'gripper_depth',
-                       ]:
-                data_dict[key] = self._binary_to_image(npzfile[key])
-            else:
-                data_dict[key] = pickle.loads(npzfile[key])
+            data_dict = {}
+            for key in npzfile.files:
+                # 读取并反序列化每个数据项
+                if key in ['primary_rgb', 'gripper_rgb',
+                           'primary_depth', 'gripper_depth',
+                           ]:
+                    data_dict[key] = np.array(cls._binary_to_image(npzfile[key]))
+                else:
+                    data_dict[key] = pickle.loads(npzfile[key])
 
-        self.data_dict = data_dict
-        return data_dict
+            handler_instance = cls(data_dict)
+            return handler_instance
+        except FileNotFoundError as e:
+            warnings.warn(f"FileNotFoundError: {e} for {file_path}")
+            return None
+        except Exception as e:
+            warnings.warn(f"File broken or other error: {e} for {file_path}")
+            return None
 
     def get(self, key):
         """获取 .npz 文件中指定项的数据"""
@@ -130,8 +139,9 @@ class DataHandler:
     @staticmethod
     def _binary_to_image(binary_data):
         """将二进制数据转换回 PIL 图像"""
-        with BytesIO(binary_data) as buffer:
-            pil_image = Image.open(buffer)
+        buffer = BytesIO(binary_data)  # 保持 buffer 在内存中
+        pil_image = Image.open(buffer)
+        pil_image.load()  # 强制加载图像数据
         return pil_image
 
 

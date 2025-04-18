@@ -21,6 +21,7 @@ dependencies = [
     "uvicorn",
 #    "gradio",
     "torch~=2.1.0",
+    "numpy<2"  # not sure if >=2 is ok
 ]
 
 # 配置项目的分类（适用于 PyPI）
