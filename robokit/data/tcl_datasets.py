@@ -10,8 +10,7 @@ class TCLDataset(Dataset):
         super(TCLDataset, self).__init__()
         self.root = root
 
-        self.tasks = os.listdir(self.root)
-        self.tasks.sort()
+        self.tasks = self.get_tasks(root)
         self.task_lengths = []
         self.ep_fns = []
         self.map_index_to_task_id = []
@@ -28,18 +27,28 @@ class TCLDataset(Dataset):
 
         print("[TCLDataset] total length:", self.total_length)
 
+    def get_tasks(self, root):
+        self.root = root
+        tasks = []
+        for task in os.listdir(root):
+            if not os.path.isdir(os.path.join(root, task)):
+                continue
+            tasks.append(task)
+        tasks.sort()
+        return tasks
+
     def __getitem__(self, index):
         task_id = self.map_index_to_task_id[index]
-        ep_path = os.path.join(self.root, self.ep_fns[index])
+        npz_path = os.path.join(self.root, self.ep_fns[index])
 
-        ep_data = self.load_single_episode(str(ep_path))
-        if ep_data is None:  # file broken or other error
-            ep_data = self.__getitem__(np.random.randint(0, len(self.ep_fns)))
+        npz_data = self.load_single_frame(str(npz_path))
+        if npz_data is None:  # file broken or other error
+            npz_data = self.__getitem__(np.random.randint(0, len(self.ep_fns)))
 
-        return ep_data
+        return npz_data
 
-    def load_single_episode(self, ep_path: str):
-        data_handler = DataHandler.load(file_path=ep_path)
+    def load_single_frame(self, npz_path: str):
+        data_handler = DataHandler.load(file_path=npz_path)
         data = data_handler.data_dict
         return data
 

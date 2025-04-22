@@ -16,12 +16,13 @@ dependencies = [
     "pygame",
     "roslibpy",
     "requests",
-    "scipy",
     "tqdm",
     "uvicorn",
 #    "gradio",
-    "torch~=2.1.0",
-    "numpy<2"  # not sure if >=2 is ok
+    "torch>2.1",
+    "numpy",  # not sure if >=2 is ok,
+    "matplotlib<3.10",
+    "scipy",
 ]
 
 # 配置项目的分类（适用于 PyPI）
