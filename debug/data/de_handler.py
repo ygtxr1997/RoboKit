@@ -1,6 +1,6 @@
 import numpy as np
 
-from robokit.data.data_handler import DataHandler
+from robokit.data import DataHandler
 
 
 """

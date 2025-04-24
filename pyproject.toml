@@ -34,5 +34,5 @@ classifiers = [
 
 [tool.setuptools.packages.find]
 # 自动查找所有包，包含 robokit 目录下的所有模块
-where = ["."]
-exclude = ["tests"]
+where = ["src"]
+exclude = ["debug", "tests", "thirdparty"]

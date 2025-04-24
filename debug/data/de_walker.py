@@ -2,8 +2,8 @@ import os
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
-from robokit.data.data_handler import DataHandler
-from robokit.debug_utils.printer import print_batch
+from robokit.data import DataHandler
+from robokit.debug_utils import print_batch
 
 
 class TCLDataset(Dataset):

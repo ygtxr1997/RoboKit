@@ -9,7 +9,7 @@ import pydantic
 from PIL import Image
 from fastapi import FastAPI
 
-from robokit.debug_utils.debug_classes import DebugModel, ReplayModel
+from robokit.debug_utils.debug_classes import ReplayModel
 
 
 """ How to use me?

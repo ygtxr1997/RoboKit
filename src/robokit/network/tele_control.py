@@ -7,7 +7,7 @@ import pygame
 import numpy as np
 
 from .robot_client import RobotClient
-from robokit.data.data_handler import DataHandler, MultiDataHandler
+from robokit.data.data_handler import MultiDataHandler
 from robokit.data.realsense_handler import RealsenseHandler
 
 
@@ -33,7 +33,8 @@ class BaseController:
         self.fps = 5
 
         # Dynamic
-        self.xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+        self.linear_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+        self.angular_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
         self.z_39 = 0.  # left-right axis of z, only used by angular jog move
         self.g = 0.  # 0:open, 1:close
 
@@ -54,7 +55,7 @@ class BaseController:
         self.camera = RealsenseHandler(frame_rate=30)
         self.data_manager = MultiDataHandler()
         self.need_saving = False
-        self.saving_root = "collected_data/"
+        self.saving_root = "collected_data_0422/"
         self.saving_dir: str = None
         self.saving_frame_idx: int = 0
 
@@ -126,14 +127,14 @@ class BaseController:
                         self.on_back_home()
 
                     # Check XYZ Move
+                    zero_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
                     if self.is_linear_jog_pressed():
                         self.on_linear_jog()
                     elif self.is_angular_jog_pressed():
                         self.on_angular_jog()
                     else:
-                        self.xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
-                        self.on_linear_jog()
-                        self.on_angular_jog()
+                        self.on_linear_jog(zero_xyz)
+                        self.on_angular_jog(zero_xyz, z_39=0.)
 
                     # Check Gripper
                     self.on_gripper_move()
@@ -156,6 +157,16 @@ class BaseController:
                     start_time = pygame.time.get_ticks()
                     robot_data = self.robot.get_current_frame_info()
                     print("[DEBUG] Get robot data cost:", pygame.time.get_ticks() - start_time)
+
+                    # Note: if not set linear_jog to zero, will save wrong data
+                    zero_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+                    if self.is_linear_jog_pressed():
+                        robot_data['jog_angular'] = zero_xyz
+                    elif self.is_angular_jog_pressed():
+                        robot_data['jog_linear'] = zero_xyz
+                    else:
+                        robot_data['jog_angular'] = zero_xyz
+                        robot_data['jog_linear'] = zero_xyz
 
                     frame_actions = np.array([
                         robot_data['jog_linear']['x'],
@@ -232,7 +243,7 @@ class BaseController:
         text = font.render(f"{label}: {value:.2f}", True, BLUE)
         screen.blit(text, (pos_x + bar_width + 20, pos_y + 5))
 
-    ''' Read information from Robotic Arm '''
+    ''' Read information from Joystick '''
     @abstractmethod
     def update_state(self) -> None: pass
     @abstractmethod
@@ -275,15 +286,16 @@ class BaseController:
             self.game_state = GameState.RUNNING
 
     def on_linear_jog(self, xyz: dict = None) -> None:
-        self.xyz = xyz if xyz is not None else self.xyz
-        scaled_xyz = {k: v * self.linear_scale for k, v in self.xyz.items()}
+        self.linear_xyz = xyz if xyz is not None else self.linear_xyz
+        scaled_xyz = {k: v * self.linear_scale for k, v in self.linear_xyz.items()}
         self.robot.linear_jog_pub(scaled_xyz)
 
-    def on_angular_jog(self, xyz: dict = None) -> None:
-        self.xyz = xyz if xyz is not None else self.xyz
-        scaled_xyz = self.xyz.copy()
-        scaled_xyz['x'] = self.xyz['y']
-        scaled_xyz['y'] = -self.xyz['x']
+    def on_angular_jog(self, xyz: dict = None, z_39: float = None) -> None:
+        self.angular_xyz = xyz if xyz is not None else self.angular_xyz
+        self.z_39 = z_39 if z_39 is not None else self.z_39
+        scaled_xyz = self.angular_xyz.copy()
+        scaled_xyz['x'] = self.angular_xyz['y']
+        scaled_xyz['y'] = -self.angular_xyz['x']
         scaled_xyz['z'] = scaled_xyz['z'] if abs(scaled_xyz['z']) > abs(self.z_39) else self.z_39
         scaled_xyz = {k: v * self.angular_scale for k, v in scaled_xyz.items()}
         self.robot.ang_jog_pub(scaled_xyz)
@@ -348,7 +360,8 @@ class SwitchProController(BaseController):
         y = self.get_joy_axis(1)
         z = -self.get_joy_axis(3)
         z_39 = -self.get_joy_axis(2)
-        self.xyz = {'x': x, 'y': y, 'z': z}
+        self.linear_xyz = {'x': x, 'y': y, 'z': z}
+        self.angular_xyz = {'x': x, 'y': y, 'z': z}
         self.z_39 = z_39
 
     def update_g(self):

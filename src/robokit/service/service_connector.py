@@ -51,7 +51,7 @@ class ServiceConnector:
         response.raise_for_status()
 
         response = response.json()
-        raw_actions = np.array(response["action"])[None]  # (1,6)
+        raw_actions = np.array(response["action"])[None]  # (1,6) or (1,7)
         return raw_actions
 
     @staticmethod
