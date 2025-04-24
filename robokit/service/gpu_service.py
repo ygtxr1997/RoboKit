@@ -9,7 +9,7 @@ import pydantic
 from PIL import Image
 from fastapi import FastAPI
 
-from robokit.debug_utils.debug_classes import DebugModel
+from robokit.debug_utils.debug_classes import DebugModel, ReplayModel
 
 
 """ How to use me?
@@ -27,7 +27,11 @@ class StepRequestWithObservation(pydantic.BaseModel):
 
 @lru_cache()
 def get_agent(device: str):
-    model = DebugModel(sleep_duration=100)
+    ## Op1. Debug model, sleep only
+    # model = DebugModel(sleep_duration=100)
+    ## Op2. Replay model, load action data and sleep
+    model = ReplayModel(sleep_duration=25,
+                        replay_root="/home/geyuan/datasets/TCL/collected_data")
     return model
 
 
