@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-from numpy.dtypes import ByteDType
 
 
 def print_leaf(prefix, x):

@@ -8,7 +8,7 @@ from robokit.data.data_handler import DataHandler
 
 
 class TCLDataset(Dataset):
-    def __init__(self, root):
+    def __init__(self, root, use_extracted: bool = False):
         super(TCLDataset, self).__init__()
         self.root = root
 
@@ -27,6 +27,10 @@ class TCLDataset(Dataset):
         self.total_length = sum(self.task_lengths)
         assert (len(self.ep_fns) == len(self.map_index_to_task_id))
 
+        self.extracted_data = {}
+        if use_extracted:
+            self.load_npy_by_key("rel_actions")
+
         print("[TCLDataset] total length:", self.total_length)
 
     def get_tasks(self, root):
@@ -34,6 +38,8 @@ class TCLDataset(Dataset):
         tasks = []
         for task in os.listdir(root):
             if not os.path.isdir(os.path.join(root, task)):
+                continue
+            elif "extracted" in task:  # skip some meta info folders
                 continue
             tasks.append(task)
         tasks.sort()
@@ -105,11 +111,37 @@ class TCLDataset(Dataset):
             statistics = json.load(json_file)
         return statistics
 
+    def save_to_npy_by_key(self, key: str, path: str = None):
+        if path is None:
+            path = os.path.join(self.root, f"extracted/{key}.npy")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        all_key_data = []
+        for idx in tqdm(range(self.__len__()), desc=f"Loading key={key}"):
+            data_dict = self.__getitem__(idx)
+            key_data = data_dict[key]
+            all_key_data.append(key_data)
+        all_key_data = np.stack(all_key_data, axis=0)
+        np.save(path, all_key_data)
+        print(f"[TCLDataset] key={key} shape={all_key_data.shape} saved to {path}.")
+
+    def load_npy_by_key(self, key: str, path: str = None):
+        if path is None:
+            path = os.path.join(self.root, f"extracted/{key}.npy")
+        self.extracted_data[key] = np.load(path)
+        print(f"[TCLDataset] loaded key={key} shape={self.extracted_data[key].shape} from {path}")
+
 
 if __name__ == "__main__":
-    dataset = TCLDataset("/home/geyuan/datasets/TCL/collected_data_0422")
+    dataset = TCLDataset("/home/geyuan/datasets/TCL/collected_data_0422", use_extracted=True)
     dataset.__getitem__(0)
     # dataset.total_length = 100  # For debug
-    _ = dataset.get_statistics_and_save(save_json_path='tmp.json')
-    meta_info = dataset.load_statistics_from_json(json_path='tmp.json')
-    print(meta_info)
+
+    # 1. Save and load statistics info
+    # _ = dataset.get_statistics_and_save(save_json_path='tmp.json')
+    # meta_info = dataset.load_statistics_from_json(json_path='tmp.json')
+    # print(meta_info)
+
+    # 2. Extract data by key
+    # dataset.save_to_npy_by_key("rel_actions")
+    # dataset.load_npy_by_key("rel_actions")
+    print(dataset.extracted_data['rel_actions'][100])
