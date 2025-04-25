@@ -37,13 +37,13 @@ class ServiceConnector:
         Output: actions predicted by the agent
         """
         primary_base64 = self.img_np_to_base64(primary_rgb)
-        gripper_base64 = self.img_np_to_base64(gripper_rgb)
+        # gripper_base64 = self.img_np_to_base64(gripper_rgb)
 
         response = self.http_session.post(
             f"{self.base_url}/step",
             json={
                 "primary_rgb": primary_base64,
-                "gripper_rgb": gripper_base64,
+                "gripper_rgb": "none",  # to save network bandwidth
                 "instruction": task_description,
                 "joint_states": joint_states,
             }
@@ -55,14 +55,22 @@ class ServiceConnector:
         return raw_actions
 
     @staticmethod
-    def img_np_to_base64(image: np.ndarray) -> str:
+    def img_np_to_base64(image: np.ndarray) -> list[str]:
         assert image.dtype == np.uint8
 
-        image_pil = Image.fromarray(image)
-        image_bytes = io.BytesIO()
-        image_pil.save(image_bytes, format="JPEG")
-        image_bytes = image_bytes.getvalue()
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        def image_to_base64(img):
+            image_pil = Image.fromarray(img)
+            image_bytes = io.BytesIO()
+            image_pil.save(image_bytes, format="JPEG")
+            image_bytes = image_bytes.getvalue()
+            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+            return image_base64
+
+        if image.ndim == 3:  # Single frame
+            image_base64 = [image_to_base64(image)]
+        else:
+            assert image.ndim == 4  # Multi frames
+            image_base64 = [image_to_base64(img) for img in image]
 
         return image_base64
 
