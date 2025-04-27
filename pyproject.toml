@@ -20,6 +20,7 @@ dependencies = [
     "uvicorn",
 #    "gradio",
     "torch>1.12.1",
+    "torchvision",
     "numpy",  # not sure if >=2 is ok, suggest 1.26.1
     "matplotlib<3.10",
     "scipy",

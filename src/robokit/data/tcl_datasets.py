@@ -94,11 +94,13 @@ class TCLDataset(Dataset):
             "min": min_vals.tolist(),
             "max": max_vals.tolist(),
             "mean": mean_vals.tolist(),
-            "std": std_vals.tolist()
+            "std": std_vals.tolist(),
+            "total_len": self.total_length,
         }
 
         # Save statistics to a JSON file
         if save_json_path is not None:
+            save_json_path = os.path.join(self.root, save_json_path)
             with open(save_json_path, 'w') as json_file:
                 json.dump(statistics, json_file, indent=4)
             print("[TCLDataset] statistics info saved to:", save_json_path)
@@ -106,6 +108,7 @@ class TCLDataset(Dataset):
         return statistics
 
     def load_statistics_from_json(self, json_path: str) -> dict:
+        json_path = os.path.join(self.root, json_path)
         print("[TCLDataset] loading dataset statistics from:", json_path)
         with open(json_path, 'r') as json_file:
             statistics = json.load(json_file)
@@ -132,16 +135,24 @@ class TCLDataset(Dataset):
 
 
 if __name__ == "__main__":
-    dataset = TCLDataset("/home/geyuan/datasets/TCL/collected_data_0422", use_extracted=True)
+    data_root = "/home/geyuan/datasets/TCL/collected_data_0425"
+
+    # 1. Load data
+    dataset = TCLDataset(data_root, use_extracted=False)
     dataset.__getitem__(0)
     # dataset.total_length = 100  # For debug
 
-    # 1. Save and load statistics info
-    # _ = dataset.get_statistics_and_save(save_json_path='tmp.json')
-    # meta_info = dataset.load_statistics_from_json(json_path='tmp.json')
-    # print(meta_info)
+    # 2. Save and load statistics info
+    statistics_json_path = "statistics.json"
+    _ = dataset.get_statistics_and_save(save_json_path=statistics_json_path)
+    meta_info = dataset.load_statistics_from_json(json_path=statistics_json_path)
+    print(meta_info)
 
-    # 2. Extract data by key
-    # dataset.save_to_npy_by_key("rel_actions")
-    # dataset.load_npy_by_key("rel_actions")
-    print(dataset.extracted_data['rel_actions'][100])
+    # 3. Extract data by key
+    dataset.save_to_npy_by_key("rel_actions")
+    dataset.load_npy_by_key("rel_actions")
+    print(dataset.extracted_data['rel_actions'][23])
+
+    # 4. Reload dataset using extracted key
+    dataset_2 = TCLDataset(data_root, use_extracted=True)
+    print(dataset.extracted_data['rel_actions'][23])
