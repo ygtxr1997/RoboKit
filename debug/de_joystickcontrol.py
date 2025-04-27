@@ -2,8 +2,8 @@ import time
 
 import roslibpy
 
-from robokit.network.robot_client import RobotClient
-from robokit.network.tele_control import SwitchProController
+from robokit.network import RobotClient
+from robokit.network import SwitchProController
 
 
 robot_ip = '192.168.1.7'

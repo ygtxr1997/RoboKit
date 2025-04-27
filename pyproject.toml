@@ -16,12 +16,15 @@ dependencies = [
     "pygame",
     "roslibpy",
     "requests",
-    "scipy",
     "tqdm",
     "uvicorn",
 #    "gradio",
-    "torch~=2.1.0",
-    "numpy<2"  # not sure if >=2 is ok
+    "torch>1.12.1",
+    "torchvision",
+    "numpy",  # not sure if >=2 is ok, suggest 1.26.1
+    "matplotlib<3.10",
+    "scipy",
+    "fastapi",
 ]
 
 # 配置项目的分类（适用于 PyPI）
@@ -33,5 +36,5 @@ classifiers = [
 
 [tool.setuptools.packages.find]
 # 自动查找所有包，包含 robokit 目录下的所有模块
-where = ["."]
-exclude = ["tests"]
+where = ["src"]
+exclude = ["debug", "tests", "thirdparty"]

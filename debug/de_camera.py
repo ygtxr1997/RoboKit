@@ -1,11 +1,10 @@
 import pyrealsense2 as rs
 import numpy as np
 from PIL import Image
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 import json
 
-from robokit.data.realsense_handler import RealsenseHandler
+from robokit.data import RealsenseHandler
 
 
 rs_handler = RealsenseHandler()

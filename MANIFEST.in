@@ -1,0 +1,9 @@
+# 排除 debug 和 tests 目录中的所有文件
+recursive-exclude debug *
+recursive-exclude tests *
+recursive-exclude thirdparty *
+
+# 或者排除特定目录
+exclude debug/*
+exclude tests/*
+exclude thirdparty/*

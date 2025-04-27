@@ -1,5 +1,5 @@
 from robokit.service.service_connector import ServiceConnector
-from robokit.debug_utils.debug_classes import DebugEvaluator
+from robokit.debug_utils import DebugEvaluator
 
 
 gpu_connector = ServiceConnector(base_url="http://localhost:6060")
