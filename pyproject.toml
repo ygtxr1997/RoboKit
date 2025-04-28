@@ -19,7 +19,7 @@ dependencies = [
     "tqdm",
     "uvicorn",
 #    "gradio",
-    "torch>1.12.1",
+    "torch>=1.12.0",
     "torchvision",
     "numpy",  # not sure if >=2 is ok, suggest 1.26.1
     "matplotlib<3.10",

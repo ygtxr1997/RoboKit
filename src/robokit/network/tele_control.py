@@ -19,7 +19,9 @@ class GameState(enum.Enum):
 
 
 class BaseController:
-    def __init__(self, robot: RobotClient):
+    def __init__(self, robot: RobotClient, saving_root: str,
+                 enable_auto_ae_wb: bool = True,
+                 ):
         pygame.font.init()
         pygame.display.init()
         pygame.joystick.init()
@@ -53,9 +55,12 @@ class BaseController:
 
         # Cameras
         self.camera = RealsenseHandler(frame_rate=30)
+        self.camera.set_ae_wb_auto(enable_auto_ae_wb)
+        if not enable_auto_ae_wb:
+            self.camera.set_ae_wb(exposure=50)
         self.data_manager = MultiDataHandler()
         self.need_saving = False
-        self.saving_root = "collected_data_0422/"
+        self.saving_root = saving_root
         self.saving_dir: str = None
         self.saving_frame_idx: int = 0
 
@@ -317,12 +322,15 @@ class BaseController:
         self.saving_frame_idx = 0
         print("Episode Ended")
         self.on_rumble()
+        self.data_manager.save_data(is_last=True)
         self.on_back_home()
 
-
 class SwitchProController(BaseController):
-    def __init__(self, robot: RobotClient, joystick_idx: int = 0):
-        BaseController.__init__(self, robot)
+    def __init__(self, robot: RobotClient, joystick_idx: int = 0,
+                 saving_root: str = "collected_data_0422/",
+                 **kwargs
+                 ):
+        BaseController.__init__(self, robot, saving_root=saving_root, **kwargs)
         """
         SwitchPro (Ubuntu)
         Left Stick 0639:    A1, A1, A0, A0

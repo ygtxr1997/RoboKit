@@ -135,7 +135,7 @@ class TCLDataset(Dataset):
 
 
 if __name__ == "__main__":
-    data_root = "/home/geyuan/datasets/TCL/collected_data_0425"
+    data_root = "/home/geyuan/local_soft/TCL/collected_data_0425"
 
     # 1. Load data
     dataset = TCLDataset(data_root, use_extracted=False)

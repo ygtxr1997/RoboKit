@@ -37,7 +37,9 @@ def plot_action_wrt_time(action_data: np.ndarray):
 
     # 初始化曲线
     frames_cnt = action_data.shape[0]
-    lines = [ax.plot([], [], label=label)[0] for label in ['x', 'y', 'z', 'a', 'b', 'c', 'g']]
+    line_styles = ['solid'] * 3 + ['dashed'] * 3 + ['dotted'] * 1
+    labels = ['x', 'y', 'z', 'a', 'b', 'c', 'g']
+    lines = [ax.plot([], [], label=labels[i], linestyle=line_styles[i])[0] for i in range(len(line_styles))]
     ax.set_xlim(0, frames_cnt)
     ax.set_ylim(np.min(action_data), np.max(action_data))
     ax.set_xlabel('Time (Frames)')

@@ -29,7 +29,7 @@ class ServiceConnector:
             primary_rgb: np.ndarray,
             gripper_rgb: np.ndarray,
             task_description: Optional[str] = None,
-            joint_states: Optional[Sequence] = None,
+            joint_state: Optional[Sequence] = None,
             *args, **kwargs
     ) -> np.ndarray:
         """
@@ -45,7 +45,7 @@ class ServiceConnector:
                 "primary_rgb": primary_base64,
                 "gripper_rgb": "none",  # to save network bandwidth
                 "instruction": task_description,
-                "joint_states": joint_states,
+                "joint_state": joint_state,
             }
         )
         response.raise_for_status()

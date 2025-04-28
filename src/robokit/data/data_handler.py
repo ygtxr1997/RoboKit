@@ -155,11 +155,14 @@ class MultiDataHandler:
         self.data_queue.append(DataHandler(data_dict))
         self.save_path_queue.append(save_path)
 
-    def save_data(self):
-        if len(self.data_queue) >= self.max_data_cnt:
+    def save_data(self, is_last=False):
+        if len(self.data_queue) >= self.max_data_cnt or is_last:
             for i in range(len(self.save_path_queue)):
                 self.data_queue[i].save(self.save_path_queue[i])
-            self.data_queue = []
-            self.save_path_queue = []
+            self.reset_data()
         else:
             return
+
+    def reset_data(self):
+        self.data_queue = []
+        self.save_path_queue = []

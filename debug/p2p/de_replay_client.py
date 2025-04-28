@@ -1,8 +1,8 @@
 import roslibpy
 
 from robokit.service.service_connector import ServiceConnector
-from robokit.debug_utils import ReplayEvaluator
-from robokit.network import RobotClient
+from robokit.debug_utils.debug_classes import ReplayEvaluator
+from robokit.network.robot_client import RobotClient
 
 
 robot_ip = '192.168.1.7'
@@ -16,8 +16,8 @@ gpu_connector = ServiceConnector(base_url="http://localhost:6060")
 evaluator = ReplayEvaluator(
     gpu_service_connector=gpu_connector,
     robot=robot_client,
-    run_loops=100,
-    img_hw=(848, 480),
+    run_loops=1000,
+    img_hw=(480, 848),
 )
 evaluator.run()
 
