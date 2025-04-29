@@ -309,6 +309,18 @@ class RobotClient:
             'commander_msgs/CartesianJogDemand')
         publisher.publish(roslibpy.Message({"twist": {"angular": message}}))
 
+    def lin_ang_jog_pub(self, linear_message: dict, angular_message: dict):
+        client = self._ros
+        self.message_linear_jog = linear_message
+        self.message_angular_jog = angular_message
+        publisher = roslibpy.Topic(
+            client, '/default_move_group/cartesian_jog',
+            'commander_msgs/CartesianJogDemand')
+        publisher.publish(roslibpy.Message({"twist": {
+            "linear": linear_message,
+            "angular": angular_message
+        }}))
+
     #### GRIPPER CONTROL ####
     def _send_gripper_action(self, action: int):
         # Send, 0:GRIP, 1:RELEASE, 2:TOGGLE

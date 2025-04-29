@@ -12,13 +12,8 @@ authors = [
     { name = "Ge Yuan", email = "gavinyuan97@gmail.com" }
 ]
 dependencies = [
-#    "pyrealsense2",  # for camera
-    "pygame",
-    "roslibpy",
-    "requests",
     "tqdm",
     "uvicorn",
-#    "gradio",
     "torch>=1.12.0",
     "torchvision",
     "numpy",  # not sure if >=2 is ok, suggest 1.26.1
@@ -26,13 +21,30 @@ dependencies = [
     "scipy",
     "fastapi",
 ]
-
 # 配置项目的分类（适用于 PyPI）
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+# 可选依赖配置
+[project.optional-dependencies]
+# 添加 dev 版本依赖
+dev = [
+    #    "pyrealsense2",  # for camera
+    #    "gradio",
+    "pygame",
+    "roslibpy",
+    "requests",
+    # 陀螺仪
+    "evdev",
+    "PyOpenGL",
+    "ahrs",
+    "transforms3d",
+]
+
+
 
 [tool.setuptools.packages.find]
 # 自动查找所有包，包含 robokit 目录下的所有模块

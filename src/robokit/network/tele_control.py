@@ -7,6 +7,7 @@ import pygame
 import numpy as np
 
 from .robot_client import RobotClient
+from robokit.network.imu_control import IMUControl
 from robokit.data.data_handler import MultiDataHandler
 from robokit.data.realsense_handler import RealsenseHandler
 
@@ -32,7 +33,7 @@ class BaseController:
         self.robot = robot
         self.linear_scale = 0.1
         self.angular_scale = 0.1
-        self.fps = 5
+        self.fps = 15
 
         # Dynamic
         self.linear_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
@@ -79,6 +80,7 @@ class BaseController:
             current_time = pygame.time.get_ticks()
             self.screen.fill((255, 255, 255))
 
+            angular_release = False
             for event in pygame.event.get():
                 if event.type == pygame.JOYBUTTONDOWN:
                     if event.button == self.get_pause_button() and not toggle_flag:
@@ -87,6 +89,9 @@ class BaseController:
                 elif event.type == pygame.JOYBUTTONUP:
                     if event.button == self.get_pause_button():
                         toggle_flag = False  # 当按钮释放时允许再次切换
+                    elif event.button == self.get_angular_button():
+                        angular_release = True
+                        self.on_angular_button_released()
 
             self.update_state()
             self.update_xyz()
@@ -220,7 +225,7 @@ class BaseController:
                     self.saving_frame_idx += 1
 
             # Framerate setting
-            pygame.time.Clock().tick(120)
+            pygame.time.Clock().tick(300)
             pygame.display.flip()
 
         print("Program Exiting due to Exit Pressed")
@@ -264,6 +269,8 @@ class BaseController:
     @abstractmethod
     def get_pause_button(self) -> int: pass
     @abstractmethod
+    def get_angular_button(self) -> int: pass
+    @abstractmethod
     def is_linear_jog_pressed(self) -> bool: pass
     @abstractmethod
     def is_angular_jog_pressed(self) -> bool: pass
@@ -278,6 +285,7 @@ class BaseController:
     ''' Default behavior when some Events are detected '''
     def on_before_exit(self) -> None: pass
     def on_after_exit(self) -> None: pass
+    def on_angular_button_released(self) -> None: pass
 
     def on_back_home(self) -> None:
         self.robot.joint_back_home()
@@ -324,6 +332,7 @@ class BaseController:
         self.on_rumble()
         self.data_manager.save_data(is_last=True)
         self.on_back_home()
+
 
 class SwitchProController(BaseController):
     def __init__(self, robot: RobotClient, joystick_idx: int = 0,
@@ -388,6 +397,9 @@ class SwitchProController(BaseController):
     def get_pause_button(self):
         return 10  # button number
 
+    def get_angular_button(self):
+        return 5
+
     def is_linear_jog_pressed(self):
         return self.joystick.get_button(6)
 
@@ -402,6 +414,45 @@ class SwitchProController(BaseController):
 
     def on_rumble(self) -> None:
         self.joystick.rumble(0.4, 0.4, 300)
+
+
+class SwitchProIMUController(SwitchProController):
+    def __init__(self, robot: RobotClient, joystick_idx: int = 0,
+                 saving_root: str = "collected_data_0422/",
+                 **kwargs
+                 ):
+        SwitchProController.__init__(self, robot, joystick_idx=joystick_idx,
+                                     saving_root=saving_root, **kwargs)
+        self.imu_controller = IMUControl()
+        self.angular_scale = 1.5
+
+    def update_xyz(self):
+        x = -self.get_joy_axis(0)
+        y = self.get_joy_axis(1)
+        z = -self.get_joy_axis(3)
+        self.linear_xyz = {'x': x, 'y': y, 'z': z}
+
+        controller_quat, rpy_rel = self.imu_controller.capture_imu_pose()
+        roll, pitch, yaw = rpy_rel
+        self.angular_xyz = {'x': roll, 'y': pitch, 'z': yaw}
+        self.z_39 = 0.
+
+    def on_angular_jog(self, xyz: dict = None, z_39: float = None) -> None:
+        """ Also let linear axes move """
+        linear_scaled_xyz = {k: v * self.linear_scale for k, v in self.linear_xyz.items()}
+
+        self.angular_xyz = xyz if xyz is not None else self.angular_xyz
+        self.z_39 = z_39 if z_39 is not None else self.z_39
+        scaled_xyz = self.angular_xyz.copy()
+        scaled_xyz['x'] = self.angular_xyz['y']
+        scaled_xyz['y'] = -self.angular_xyz['x']
+        scaled_xyz['z'] = scaled_xyz['z'] if abs(scaled_xyz['z']) > abs(self.z_39) else self.z_39
+        scaled_xyz = {k: v * self.angular_scale for k, v in scaled_xyz.items()}
+
+        self.robot.lin_ang_jog_pub(linear_scaled_xyz, scaled_xyz)
+
+    def on_angular_button_released(self):
+        self.imu_controller.rpy_rel = [0., 0., 0.]
 
 
 class KeyboardController:
