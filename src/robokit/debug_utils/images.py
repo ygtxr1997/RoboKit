@@ -1,6 +1,11 @@
+from abc import abstractmethod, ABC
+import math
+from typing import List, Dict
+
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
 
 def concatenate_rgb_images(img1, img2, vertical=False, smaller_size=2):
@@ -66,3 +71,77 @@ def plot_action_wrt_time(action_data: np.ndarray):
 
     plt.close(fig)
     return frames, fig, ax
+
+
+class DynamicDataDrawer(ABC):
+    def __init__(self, data_provider, data_keys: List[List[str]], max_points: int = 1000):
+        self.data_provider = data_provider
+        self.data_keys_grouped = data_keys  # 二维列表
+        self.max_points = max_points
+
+        # 展平所有 key，便于初始化数据缓存
+        flat_keys = [key for group in data_keys for key in group]
+        self.data_dict = {k: [] for k in flat_keys}
+        self.data_max = {k: -np.inf for k in flat_keys}
+
+        self.colors = ['r', 'g', 'b', 'c', 'm', 'y']
+        self.linestyles = ['solid'] * 3 + ['dashed'] * 3
+        self.y_minmax_values = [[-10, 10], [-60, 60], [-200, 200]]  # 一组子图一个范围
+
+        # 设置子图行列
+        self.n_subplots = len(data_keys)
+        self.ncols = 3
+        self.nrows = math.ceil(self.n_subplots / self.ncols)
+
+        # 创建子图
+        self.fig, self.axes = plt.subplots(self.nrows, self.ncols, figsize=(24, 6 * self.nrows))
+        self.axes = self.axes.flatten()  # 展平，方便用索引访问
+        self.lines = {}
+
+    def init(self):
+        for idx, key_group in enumerate(self.data_keys_grouped):
+            ax = self.axes[idx]
+            for j, key in enumerate(key_group):
+                self.lines[key], = ax.plot(
+                    [], [], label=key,
+                    color=self.colors[j % len(self.colors)],
+                    linestyle=self.linestyles[j % len(self.linestyles)],
+                )
+            ax.set_xlim(0, self.max_points)
+            y_min, y_max = self.y_minmax_values[idx]
+            ax.set_ylim(y_min, y_max)
+            ax.set_title(f"Live Data Group {idx+1}")
+            ax.legend(loc='upper left')
+        return list(self.lines.values())
+
+    @abstractmethod
+    def get_new_data(self) -> dict:
+        pass
+
+    def update(self, frame):
+        new_data = self.get_new_data()
+        for key in new_data:
+            self.data_dict[key].append(new_data[key])
+            self.data_max[key] = max(self.data_max[key], new_data[key])
+            if len(self.data_dict[key]) > self.max_points:
+                self.data_dict[key].pop(0)
+            x = list(range(len(self.data_dict[key])))
+            self.lines[key].set_data(x, self.data_dict[key])
+        print("[DynamicDataDrawer] NOW:", new_data)
+        print("[DynamicDataDrawer] MAX:", self.data_max)
+        return list(self.lines.values())
+
+    def run(self):
+        self.ani = FuncAnimation(
+            self.fig,
+            self.update,
+            init_func=self.init,
+            interval=100,
+            blit=False,
+            save_count=200,
+        )
+        plt.tight_layout()
+        plt.show()
+
+
+
