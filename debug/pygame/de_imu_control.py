@@ -4,10 +4,10 @@ from pygame.locals import DOUBLEBUF, OPENGL, QUIT, KEYDOWN, K_SPACE, K_m
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
-from robokit.network.imu_control import IMUControl
+from robokit.network.imu_control import RawIMUHandlerIncremental
 
 
-imu_controller = IMUControl()
+imu_controller = RawIMUHandlerIncremental()
 
 pygame.init()
 W, H = 800, 600
@@ -24,7 +24,7 @@ use_remap = True
 # ---------- 主循环 ----------
 clock = pygame.time.Clock()
 running = True
-q_pose = imu_controller.q_pose
+q_pose = imu_controller.q_cum
 try:
     while running:
         for event in pygame.event.get():
@@ -39,6 +39,8 @@ try:
                     print(f"[坐标轴映射切换] 当前 {'启用' if use_remap else '关闭'}")
 
         q_now, rpy_rel = imu_controller.capture_imu_pose()
+        q_now = imu_controller.q_cum
+        rpy_rel = imu_controller.rpy_rel
         q_now = imu_controller.remap_xyz_swap_xz(q_now) if use_remap else q_now
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
