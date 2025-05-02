@@ -11,7 +11,7 @@ from OpenGL.GLU import *
 import sys
 import transforms3d
 import transforms3d.quaternions as quat
-from transforms3d.euler import quat2euler, mat2euler
+from transforms3d.euler import quat2euler, mat2euler, euler2quat
 from transforms3d.quaternions import qmult, qinverse, quat2mat, axangle2quat
 from ahrs.filters import Madgwick
 
@@ -764,6 +764,7 @@ class RawIMUHandler:
         raise RuntimeError('IMU 未找到')
 
 
+from collections import deque
 class RawIMUHandlerIncremental:
     def __init__(self, device_name="Pro Controller (IMU)"):
         self.device_name = device_name
@@ -771,13 +772,16 @@ class RawIMUHandlerIncremental:
         print(f'[RawIMUHandler] Using {self.imu.path} ({self.imu.name})')
 
         self.AXIS_MAP = {
-            ecodes.ABS_RX: 'gx', ecodes.ABS_RY: 'gy', ecodes.ABS_RZ: 'gz',
-            ecodes.ABS_X: 'ax', ecodes.ABS_Y: 'ay', ecodes.ABS_Z: 'az',
+            ecodes.ABS_RX: 'gy', ecodes.ABS_RY: 'gz', ecodes.ABS_RZ: 'gx',
+            ecodes.ABS_X: 'ay', ecodes.ABS_Y: 'az', ecodes.ABS_Z: 'ax',
         }
 
         self.GYRO_SCALE = (1 / 1000.) * 2000.0 / 32767.0
         self.GYRO_TO_RAD = np.pi / 180
         self.ACC_SCALE = 9.8 * 8.0 / 32767
+
+        self.ACC_SCALE = 9.80665 / 8192  # m/s²
+        self.GYRO_SCALE = 1 / 1024  # rad/s
 
         self.state = {'ax': 0, 'ay': 0, 'az': 0, 'gx': 0, 'gy': 0, 'gz': 0}
         self.state_converted = copy.deepcopy(self.state)

@@ -20,7 +20,10 @@ newgrp input      # 或者重新登录一
 
 class IMUVisualizer(DynamicDataDrawer):
     def __init__(self, max_points: int = 200):
-        self.raw_imu = RawIMUHandlerIncremental()
+        self.raw_imu = RawIMUHandlerIncremental(
+            # device_name='Pro Controller IMU)',
+            device_name='DualSense Wireless Controller Motion Sensors',
+        )
         super().__init__(self.raw_imu,
                          data_keys=[['ax', 'ay', 'az'], ['gx', 'gy', 'gz'], ['roll', 'pitch', 'yaw']],
                          max_points=max_points)

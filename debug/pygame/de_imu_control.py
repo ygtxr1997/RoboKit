@@ -7,7 +7,9 @@ from OpenGL.GLU import *
 from robokit.network.imu_control import RawIMUHandlerIncremental
 
 
-imu_controller = RawIMUHandlerIncremental()
+imu_controller = RawIMUHandlerIncremental(
+    device_name='DualSense Wireless Controller Motion Sensors',
+)
 
 pygame.init()
 W, H = 800, 600
@@ -62,7 +64,7 @@ try:
         imu_controller.display_rpy(screen, rpy_rel)
 
         pygame.display.flip()
-        clock.tick(60)
+        clock.tick(240)
 
 except KeyboardInterrupt:
     print("\n[用户中断退出]")
