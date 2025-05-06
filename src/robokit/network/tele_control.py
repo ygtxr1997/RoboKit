@@ -8,7 +8,7 @@ import numpy as np
 
 from .robot_client import RobotClient
 from robokit.network.imu_control import RawIMUHandler
-from robokit.data.data_handler import MultiDataHandler
+from robokit.data.data_handler import ForkedDataSaver
 from robokit.data.realsense_handler import RealsenseHandler
 
 
@@ -33,7 +33,7 @@ class BaseController:
         self.robot = robot
         self.linear_scale = 0.1
         self.angular_scale = 0.1
-        self.fps = 15
+        self.fps = 30
 
         # Dynamic
         self.linear_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
@@ -55,11 +55,11 @@ class BaseController:
         self.game_state = GameState.INIT
 
         # Cameras
-        self.camera = RealsenseHandler(frame_rate=30)
+        self.camera = RealsenseHandler(frame_rate=60)
         self.camera.set_ae_wb_auto(enable_auto_ae_wb)
         if not enable_auto_ae_wb:
             self.camera.set_ae_wb(exposure=50)
-        self.data_manager = MultiDataHandler()
+        self.data_manager = ForkedDataSaver(num_workers=6)
         self.need_saving = False
         self.saving_root = saving_root
         self.saving_dir: str = None
@@ -162,11 +162,11 @@ class BaseController:
 
                     start_time = pygame.time.get_ticks()
                     camera_data = self.camera.capture_frames()
-                    print("[DEBUG] Get camera data cost:", pygame.time.get_ticks() - start_time)
+                    # print("[DEBUG] Get camera data cost:", pygame.time.get_ticks() - start_time)
                     task_instruction = "pick up the banana"
                     start_time = pygame.time.get_ticks()
                     robot_data = self.robot.get_current_frame_info()
-                    print("[DEBUG] Get robot data cost:", pygame.time.get_ticks() - start_time)
+                    # print("[DEBUG] Get robot data cost:", pygame.time.get_ticks() - start_time)
 
                     # Note: if not set linear_jog to zero, will save wrong data
                     zero_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
@@ -216,10 +216,11 @@ class BaseController:
                         "robot_obs": frame_robot_obs,
                     }
 
-                    save_path = os.path.join(self.saving_dir, f"{self.saving_frame_idx:06d}.npz")
-                    self.data_manager.add_data(frame_data_dict, save_path)
+                    save_fn = f"{self.saving_frame_idx:06d}.npz"
+                    save_path = os.path.join(self.saving_dir, save_fn)
+                    self.data_manager.submit(frame_data_dict, self.saving_dir, file_path=None)
                     start_time = pygame.time.get_ticks()
-                    self.data_manager.save_data()
+                    # self.data_manager.save_data()
                     print("[DEBUG] Saving data cost:", pygame.time.get_ticks() - start_time)
                     print("---" * 30)
                     self.saving_frame_idx += 1
@@ -330,7 +331,9 @@ class BaseController:
         self.saving_frame_idx = 0
         print("Episode Ended")
         self.on_rumble()
-        self.data_manager.save_data(is_last=True)
+        print("Waiting for saving last data in queue")
+        self.data_manager.close()
+        print("Last data saved.")
         self.on_back_home()
 
 
@@ -533,7 +536,7 @@ class PS5DualSenseController(BaseController):
         return self.joystick.get_button(3)
 
     def on_rumble(self) -> None:
-        self.joystick.rumble(0.4, 0.4, 300)
+        self.joystick.rumble(0.2, 0.4, 100)
 
 
 class PS5DualSenseIMUController(PS5DualSenseController):
@@ -544,23 +547,34 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         PS5DualSenseController.__init__(self, robot, joystick_idx=joystick_idx,
                                      saving_root=saving_root, **kwargs)
         self.imu_controller = RawIMUHandler()
-        self.angular_scale = 1.
+        self.angular_scale = .3
 
     def update_xyz(self):
         x = -self.get_joy_axis(0)
         y = self.get_joy_axis(1)
-        z = -self.get_joy_axis(3)
+        z = -self.get_joy_axis(4)
         self.linear_xyz = {'x': x, 'y': y, 'z': z}
 
-        imu_data = self.imu_controller.get_latest_euler()
-        rpy_rel = imu_data['euler']
-        roll, pitch, yaw = rpy_rel
-        self.angular_xyz = {'x': roll, 'y': pitch, 'z': yaw}
-        self.z_39 = 0.
+        # start = time.time()
+        # euler_data = self.imu_controller.get_latest_euler()
+        # print(f"[PS5DualSenseIMUController] Euler data received. time={(time.time()-start) * 1000:.2f} ms")
+        # # rpy_now = euler_data['euler'][:3]
+        # rpy_rel = euler_data['euler'][3:6]
+        # roll, pitch, yaw = rpy_rel
+        # self.angular_xyz = {'x': roll, 'y': pitch, 'z': yaw}
+        # self.z_39 = 0.
 
     def on_angular_jog(self, xyz: dict = None, z_39: float = None) -> None:
         """ Also let linear axes move """
         linear_scaled_xyz = {k: v * self.linear_scale for k, v in self.linear_xyz.items()}
+
+        # Only need to obtain angular_xyz when moving
+        euler_data = self.imu_controller.get_latest_euler()
+        # rpy_now = euler_data['euler'][:3]
+        rpy_rel = euler_data['euler'][3:6]
+        roll, pitch, yaw = rpy_rel
+        self.angular_xyz = {'x': -roll, 'y': -pitch, 'z': yaw}
+        self.z_39 = 0.
 
         self.angular_xyz = xyz if xyz is not None else self.angular_xyz
         self.z_39 = z_39 if z_39 is not None else self.z_39

@@ -311,7 +311,7 @@ class RawIMUHandler:
                 # Set: q_last
                 self._acquire_euler_evt.clear()
                 dq = qmult(self.q_real, qinverse(self.q_last))
-                self.rpy_rel = quat2euler(dq, axes='sxyz')
+                self.rpy_rel = np.degrees(quat2euler(dq, axes='sxyz'))
                 self.q_last = self.q_real
 
             self.capture_imu_pose()

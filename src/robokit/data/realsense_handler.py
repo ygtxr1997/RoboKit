@@ -49,7 +49,7 @@ class RealsenseHandler(object):
         self.pipeline_profiles = pipeline_profiles
         self.pipelines = pipelines
 
-        self.auto_just_wb = True
+        self.auto_just_wb = None
         self.set_ae_wb_auto(auto_adjust=True)
         print(f"[RealsenseHandler] Initialized finished. WxH={self.img_width}x{self.img_height} fps={self.frame_rate}.")
 

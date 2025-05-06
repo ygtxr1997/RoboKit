@@ -18,6 +18,6 @@ evaluator = RealWorldEvaluator(
     robot=robot_client,
     run_loops=1000,
     img_hw=(480, 848),
-    enable_auto_ae_wb=False,
+    enable_auto_ae_wb=True,
 )  # TODO: better AE-WB setting
 evaluator.run()

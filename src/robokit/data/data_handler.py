@@ -5,6 +5,7 @@ from PIL import Image
 from io import BytesIO
 import os
 import multiprocessing as mp
+from datetime import datetime
 
 
 class DataHandler:
@@ -170,9 +171,7 @@ class MultiDataHandler:
 
 
 class ForkedDataSaver:
-    def __init__(self, save_dir="tmp_data", num_workers=None, max_queue_size=5000):
-        self.save_dir = save_dir
-        os.makedirs(save_dir, exist_ok=True)
+    def __init__(self, num_workers=None, max_queue_size=5000):
         self.max_queue_size = max_queue_size
         self.queue = mp.Queue(maxsize=max_queue_size)
 
@@ -197,10 +196,10 @@ class ForkedDataSaver:
             except Exception as e:
                 print(f"[ForkedDataSaver Worker Error] Failed to save {file_path}: {e}")
 
-    def submit(self, data_dict, file_path=None):
+    def submit(self, data_dict, saving_dir, file_path=None):
         if file_path is None:
             timestamp = datetime.now().strftime("%m%d_%H%M%S_%f")
-            file_path = os.path.join(self.save_dir, f"data_{timestamp}.npz")
+            file_path = os.path.join(saving_dir, f"{timestamp}.npz")
         try:
             self.queue.put_nowait((data_dict, file_path))
         except mp.queues.Full:
@@ -208,6 +207,9 @@ class ForkedDataSaver:
         return file_path
 
     def close(self):
+        remaining = self.queue.qsize()
+        print(f"[ForkedDataSaver] Remaining: {remaining}")
+
         for _ in self.workers:
             self.queue.put(None)
         for w in self.workers:

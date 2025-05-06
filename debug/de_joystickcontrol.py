@@ -3,7 +3,7 @@ import time
 import roslibpy
 
 from robokit.network.robot_client import RobotClient
-from robokit.network.tele_control import SwitchProController, SwitchProIMUController
+from robokit.network.tele_control import SwitchProController, SwitchProIMUController, PS5DualSenseIMUController
 
 
 robot_ip = '192.168.1.7'
@@ -14,10 +14,10 @@ client.run()
 print('Verifying the ROS target is connected?', client.is_connected)
 
 rc = RobotClient(client)
-controller = SwitchProIMUController(
+controller = PS5DualSenseIMUController(
     robot=rc,
     saving_root="/home/geyuan/local_soft/TCL/collected_data_0425_tmp/",
-    enable_auto_ae_wb=False,
+    enable_auto_ae_wb=True,
 )
 
 controller.start()
