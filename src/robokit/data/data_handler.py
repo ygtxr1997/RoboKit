@@ -4,6 +4,7 @@ import pickle
 from PIL import Image
 from io import BytesIO
 import os
+import multiprocessing as mp
 
 
 class DataHandler:
@@ -166,3 +167,48 @@ class MultiDataHandler:
     def reset_data(self):
         self.data_queue = []
         self.save_path_queue = []
+
+
+class ForkedDataSaver:
+    def __init__(self, save_dir="tmp_data", num_workers=None, max_queue_size=5000):
+        self.save_dir = save_dir
+        os.makedirs(save_dir, exist_ok=True)
+        self.max_queue_size = max_queue_size
+        self.queue = mp.Queue(maxsize=max_queue_size)
+
+        self.num_workers = num_workers or max(1, mp.cpu_count() // 2)
+        self.workers = [
+            mp.Process(target=self._worker, args=(self.queue,))
+            for _ in range(self.num_workers)
+        ]
+        for w in self.workers:
+            w.start()
+        print(f"[ForkedDataSaver] Started. num_workers={self.num_workers}.")
+
+    def _worker(self, queue):
+        while True:
+            item = queue.get()
+            if item is None:
+                break
+            data_dict, file_path = item
+            try:
+                handler = DataHandler(data_dict)
+                handler.save(file_path)
+            except Exception as e:
+                print(f"[ForkedDataSaver Worker Error] Failed to save {file_path}: {e}")
+
+    def submit(self, data_dict, file_path=None):
+        if file_path is None:
+            timestamp = datetime.now().strftime("%m%d_%H%M%S_%f")
+            file_path = os.path.join(self.save_dir, f"data_{timestamp}.npz")
+        try:
+            self.queue.put_nowait((data_dict, file_path))
+        except mp.queues.Full:
+            print(f"[Warning] Save queue full (>{self.max_queue_size}). Data dropped.")
+        return file_path
+
+    def close(self):
+        for _ in self.workers:
+            self.queue.put(None)
+        for w in self.workers:
+            w.join()
