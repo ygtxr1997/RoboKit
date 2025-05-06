@@ -86,11 +86,11 @@ class DynamicDataDrawer(ABC):
 
         self.colors = ['r', 'g', 'b', 'c', 'm', 'y']
         self.linestyles = ['solid'] * 3 + ['dashed'] * 3
-        self.y_minmax_values = [[-10, 10], [-60, 60], [-200, 200]]  # 一组子图一个范围
+        self.y_minmax_values = [[-10, 10], [-20, 20], [-200, 200], [-2.4, 2.4]]  # 一组子图一个范围
 
         # 设置子图行列
         self.n_subplots = len(data_keys)
-        self.ncols = 3
+        self.ncols = 2
         self.nrows = math.ceil(self.n_subplots / self.ncols)
 
         # 创建子图
@@ -127,8 +127,9 @@ class DynamicDataDrawer(ABC):
                 self.data_dict[key].pop(0)
             x = list(range(len(self.data_dict[key])))
             self.lines[key].set_data(x, self.data_dict[key])
-        print("[DynamicDataDrawer] NOW:", new_data)
-        print("[DynamicDataDrawer] MAX:", self.data_max)
+        # new_data = dict(sorted(new_data.items()))
+        # print("[DynamicDataDrawer] NOW:", new_data)
+        # print("[DynamicDataDrawer] MAX:", self.data_max)
         return list(self.lines.values())
 
     def run(self):

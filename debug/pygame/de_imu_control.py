@@ -4,10 +4,10 @@ from pygame.locals import DOUBLEBUF, OPENGL, QUIT, KEYDOWN, K_SPACE, K_m
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
-from robokit.network.imu_control import IMUControl
+from robokit.network.imu_control import RawIMUHandler
 
 
-imu_controller = IMUControl()
+imu_controller = RawIMUHandler()
 
 pygame.init()
 W, H = 800, 600
@@ -24,7 +24,7 @@ use_remap = True
 # ---------- 主循环 ----------
 clock = pygame.time.Clock()
 running = True
-q_pose = imu_controller.q_pose
+q_pose = imu_controller.q_now
 try:
     while running:
         for event in pygame.event.get():
@@ -32,14 +32,18 @@ try:
                 running = False
             if event.type == KEYDOWN:
                 if event.key == K_SPACE:
-                    q_ref = q_pose.copy()
                     print("[参考姿态重置]")
+                    imu_controller.reset_pose()
                 if event.key == K_m:
                     use_remap = not use_remap
                     print(f"[坐标轴映射切换] 当前 {'启用' if use_remap else '关闭'}")
 
-        q_now, rpy_rel = imu_controller.capture_imu_pose()
+        euler_data = imu_controller.get_latest_euler()
+        rpy_now = euler_data['euler'][:3]
+        rpy_rel = euler_data['euler'][3:6]
+        q_now = euler_data['quat']
         q_now = imu_controller.remap_xyz_swap_xz(q_now) if use_remap else q_now
+
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
@@ -56,8 +60,8 @@ try:
 
         ## 显示 RPY
         print(rpy_rel)
-        roll, pitch, yaw = rpy_rel
-        imu_controller.display_rpy(screen, rpy_rel)
+        roll, pitch, yaw = rpy_now
+        imu_controller.display_rpy(screen, rpy_now)
 
         pygame.display.flip()
         clock.tick(60)

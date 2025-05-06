@@ -1,4 +1,5 @@
 import copy
+import multiprocessing as mp
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from numpy.linalg import norm
@@ -11,153 +12,366 @@ from OpenGL.GLU import *
 import sys
 import transforms3d
 import transforms3d.quaternions as quat
+from transforms3d.euler import quat2euler, mat2euler, euler2quat
+from transforms3d.quaternions import qmult, qinverse, quat2mat, axangle2quat
 from ahrs.filters import Madgwick
 
 
-class IMUControl:
-    def __init__(self, device_name="Pro Controller (IMU)",
-
-                 ):
-        self.device_name = device_name
-        self.imu = self.find_imu(device_name)
-        print(f'[IMUControl] Using {self.imu.path} ({self.imu.name})')
-
-        # ---------- 初始化 ----------
-        self.AXIS_MAP = {
-            ecodes.ABS_RX: 'gx', ecodes.ABS_RY: 'gy', ecodes.ABS_RZ: 'gz',
-            ecodes.ABS_X: 'ax', ecodes.ABS_Y: 'ay', ecodes.ABS_Z: 'az',
+def get_gamepad_hyperparams(gamepad_name: str):
+    gamepad_name = gamepad_name.lower()
+    assert gamepad_name in ['ps5_dualsense', 'ns1_pro'], "Invalid gamepad name"
+    if gamepad_name == 'ps5_dualsense':
+        return {
+            'evdev_name': 'DualSense Wireless Controller Motion Sensors',
+            'acc_scale': 9.80665 / 8192,  # m/s²
+            'gyro_scale': 1 / 1024,  # rad/s
+            'axis_map': {
+                ecodes.ABS_RX: 'gy', ecodes.ABS_RY: 'gz', ecodes.ABS_RZ: 'gx',
+                ecodes.ABS_X: 'ay', ecodes.ABS_Y: 'az', ecodes.ABS_Z: 'ax',
+            }
         }
-        self.RAW2RAD = 2000.0 / 32767 * np.pi / 180
-        self.RAW2ACC = 9.8 / 32767
+    elif gamepad_name == 'ns1_pro':
+        return {
+            'evdev_name': 'Pro Controller (IMU)',
+            'acc_scale': 9.80665 * 8.0 / 32767,  # m/s²
+            'gyro_scale': (1 / 1000.) * 2000.0 / 32767.0,  # rad/s
+            'axis_map': {
+                ecodes.ABS_RX: 'gx', ecodes.ABS_RY: 'gy', ecodes.ABS_RZ: 'gz',
+                ecodes.ABS_X: 'ax', ecodes.ABS_Y: 'ay', ecodes.ABS_Z: 'az',
+            }
+        }
+    else:
+        raise ValueError("Unsupported gamepad name")
 
-        self.madgwick = Madgwick(sampleperiod=1 / 833)
-        self.q_pose = np.array([1.0, 0.0, 0.0, 0.0])
-        self.rpy_rel = np.array([0.0, 0.0, 0.0])
 
-        self.state = {}
-        self.t_prev = None
+import numpy as np
+from transforms3d.quaternions import qmult, qinverse
+from transforms3d.euler import quat2euler
 
-        # Calibration
-        GYRO_SCALE, DEADZONE, LPF_ALPHA, bias_gyro = self.calibrate_imu()
-        self.GYRO_SCALE = GYRO_SCALE
-        self.DEADZONE = DEADZONE
-        self.LPF_ALPHA = LPF_ALPHA
-        self.bias_gyro = bias_gyro
 
-        # 第一次滤波
-        self.omega_filtered = np.zeros(3)
-        self.omega_filtered_2nd = np.zeros(3)
+class ESKF6D:
+    def __init__(self,
+                 gyro_noise=1e-6,
+                 gyro_bias_noise=1e-8,
+                 acc_noise=1e-2):
+        # 主状态
+        self.q    = np.array([1.,0.,0.,0.])   # 姿态四元数
+        self.b_g  = np.zeros(3)               # 陀螺偏置
 
-    def calibrate_imu(self):
-        imu = self.imu
-        state = self.state
-        AXIS_MAP = self.AXIS_MAP
-        RAW2RAD = self.RAW2RAD
-        RAW2ACC = self.RAW2ACC
+        # 误差卡尔曼协方差 P (6×6)
+        self.P    = np.eye(6) * 1e-4
 
-        calib_samples = []
+        # 过程噪声 Q
+        self.Q    = np.diag([gyro_noise]*3 + [gyro_bias_noise]*3)
 
-        print(f"[IMUControl] calibrating...")
-        while len(calib_samples) < 800:
-            r, _, _ = select.select([imu.fd], [], [], 0)
-            if r:
-                try:
-                    for evt in imu.read():
-                        if evt.type == ecodes.EV_ABS and evt.code in AXIS_MAP:
-                            state[AXIS_MAP[evt.code]] = evt.value
-                            if all(k in state for k in ('gx', 'gy', 'gz', 'ax', 'ay', 'az')):
-                                omega_now = np.array([state['gx'], state['gy'], state['gz']]) * RAW2RAD
-                                accel_now = np.array([state['ax'], state['ay'], state['az']]) * RAW2ACC
-                                calib_samples.append((omega_now, accel_now))
-                except BlockingIOError:
-                    pass
+        # 测量噪声 R (针对单位重力方向)
+        self.R    = np.eye(3) * (acc_noise**2)
 
-        gyro_samples = np.array([o for o, a in calib_samples])
-        bias_gyro = np.mean(gyro_samples, axis=0)
-        gyro_std = np.std(gyro_samples, axis=0)  # 每个轴的标准差 (shape=(3,))
-
-        # 为每个轴分别设置 DEADZONE
-        GYRO_SCALE = 0.03
-        DEADZONE_XYZ = 0.03 * gyro_std * GYRO_SCALE  # 逐轴 deadzone
-        LPF_ALPHA = np.clip(np.linalg.norm(gyro_std) * 20, 0.01, 0.1)
-
-        print(f"[IMUControl][校准完成] DEADZONE={DEADZONE_XYZ}, LPF_ALPHA={LPF_ALPHA:.5f}, GYRO_SCALE={GYRO_SCALE}")
-        return GYRO_SCALE, DEADZONE_XYZ, LPF_ALPHA, bias_gyro
-
-    def capture_imu_pose(self):
-        imu = self.imu
-        madgwick = self.madgwick
-        AXIS_MAP = self.AXIS_MAP
-        state = self.state
-        RAW2RAD = self.RAW2RAD
-        RAW2ACC = self.RAW2ACC
-
-        GYRO_SCALE = self.GYRO_SCALE
-        LPF_ALPHA = self.LPF_ALPHA
-        DEADZONE_XYZ = self.DEADZONE  # 注意现在是数组了
-        bias_gyro = self.bias_gyro
-
-        q_pose_old = self.q_pose.copy()
-        q_pose_new = self.q_pose.copy()
-
-        r, _, _ = select.select([imu.fd], [], [], 0)
-        if r:
-            try:
-                for evt in imu.read():
-                    if evt.type == ecodes.EV_ABS and evt.code in AXIS_MAP:
-                        state[AXIS_MAP[evt.code]] = evt.value
-                        ts = evt.timestamp()
-                        t_now = ts if isinstance(ts, float) else ts[0] + ts[1] * 1e-6
-
-                        if all(k in state for k in ('gx', 'gy', 'gz', 'ax', 'ay', 'az')):
-                            omega_raw = np.array([state['gx'], state['gy'], state['gz']]) * RAW2RAD
-                            accel_raw = np.array([state['ax'], state['ay'], state['az']]) * RAW2ACC
-
-                            omega = (omega_raw - bias_gyro) * GYRO_SCALE
-
-                            # 第一次滤波
-                            self.omega_filtered = (1.0 - LPF_ALPHA) * self.omega_filtered + LPF_ALPHA * omega
-
-                            # 第二次滤波
-                            if not hasattr(self, 'omega_filtered_2nd'):
-                                self.omega_filtered_2nd = np.zeros(3)
-                            self.omega_filtered_2nd = ((1.0 - LPF_ALPHA) * self.omega_filtered_2nd +
-                                                       LPF_ALPHA * self.omega_filtered)
-
-                            # 分别判断每个轴是否小于对应 deadzone
-                            mask = np.abs(self.omega_filtered_2nd) < DEADZONE_XYZ
-                            self.omega_filtered_2nd = self.omega_filtered_2nd * (~mask)
-
-                            if self.t_prev is not None:
-                                dt = t_now - self.t_prev
-                                madgwick.sampleperiod = dt
-                                q_pose_new = madgwick.updateIMU(copy.deepcopy(self.q_pose),
-                                                                gyr=self.omega_filtered_2nd,
-                                                                acc=accel_raw)
-                                q_rel = quat.qmult(quat.qinverse(q_pose_old), q_pose_new)
-                                rpy_rel = self.quat2euler(q_rel)
-                                self.rpy_rel = rpy_rel
-
-                            self.t_prev = t_now
-            except BlockingIOError:
-                print("Error: BlockingIOError")
-            except Exception as e:
-                print("Error: ", e)
-
-        self.q_pose = q_pose_new
-        return self.q_pose, self.rpy_rel
+        # 参考重力方向（单位向量）
+        self.g_ref = np.array([0., 0., 1.])
 
     @staticmethod
-    def display_rpy(screen, rpy):
-        """在 HUD 中显示 roll, pitch, yaw"""
-        try:
-            roll, pitch, yaw = rpy
-            font = pygame.font.Font(None, 36)
-            text = f"Roll: {np.degrees(roll):.2f}°  Pitch: {np.degrees(pitch):.2f}°  Yaw: {np.degrees(yaw):.2f}°"
-            text_surface = font.render(text, True, (255, 255, 255))
-            screen.blit(text_surface, (10, 10))
-        except Exception as e:
-            print(f"Error displaying RPY: {e}")
+    def skew(v):
+        return np.array([[    0, -v[2],  v[1]],
+                         [ v[2],     0, -v[0]],
+                         [-v[1],  v[0],     0]])
+
+    @staticmethod
+    def small_quat(dtheta):
+        angle = np.linalg.norm(dtheta)
+        if angle < 1e-8:
+            return np.array([1.,0.,0.,0.])
+        axis = dtheta / angle
+        s = np.sin(angle/2)
+        return np.array([np.cos(angle/2), axis[0]*s, axis[1]*s, axis[2]*s])
+
+    def predict(self, gyro, dt):
+        # 去偏
+        omega = gyro - self.b_g
+
+        # 四元数积分
+        w,x,y,z = self.q
+        Omega = np.array([
+            [   0,    -omega[0], -omega[1], -omega[2]],
+            [omega[0],     0,     omega[2], -omega[1]],
+            [omega[1], -omega[2],     0,     omega[0]],
+            [omega[2],  omega[1], -omega[0],     0    ]
+        ])
+        q_dot = 0.5 * Omega.dot(self.q)
+        self.q = self.q + q_dot * dt
+        self.q /= np.linalg.norm(self.q)
+
+        # 构造 Jacobian F
+        F = np.zeros((6,6))
+        F[0:3,0:3] = -self.skew(omega)
+        F[0:3,3:6] = -np.eye(3)
+
+        # 协方差离散传播
+        self.P = self.P + (F.dot(self.P) + self.P.dot(F.T) + self.Q) * dt
+
+    def update(self, acc):
+        # 归一化测量
+        acc_norm = np.linalg.norm(acc)
+        if acc_norm < 1e-6:
+            return
+        a = acc / acc_norm
+
+        # 预测的重力方向在机体系：g_body = q ⊗ [0,g_ref] ⊗ q⁻¹，然后取向量部分
+        q_conj = qinverse(self.q)
+        g_body_full = qmult(qmult(self.q, np.hstack([0., self.g_ref])), q_conj)
+        g_body = g_body_full[1:]
+
+        # 创新
+        y = a - g_body
+
+        # 测量矩阵 H = [∂g_body/∂δθ , 0]
+        H = np.zeros((3,6))
+        H[:,0:3] = self.skew(g_body)
+
+        # 卡尔曼增益
+        S = H.dot(self.P).dot(H.T) + self.R
+        K = self.P.dot(H.T).dot(np.linalg.inv(S))
+
+        # 误差状态
+        dx = K.dot(y)
+        dtheta = dx[0:3]
+        dbias  = dx[3:6]
+
+        # 修正主状态
+        dq = self.small_quat(dtheta)
+        self.q  = qmult(self.q, dq)
+        self.q /= np.linalg.norm(self.q)
+        self.b_g += dbias
+
+        # 更新协方差
+        I = np.eye(6)
+        self.P = (I - K.dot(H)).dot(self.P)
+
+    def get_rpy(self):
+        return quat2euler(self.q, axes='sxyz')
+
+
+class RawIMUHandler:
+    def __init__(self, game_pad_name='ps5_dualsense'):
+
+        gamepad_hyperparams = get_gamepad_hyperparams(game_pad_name)
+        self.device_name = gamepad_hyperparams['evdev_name']
+        self.ACC_SCALE = gamepad_hyperparams['acc_scale']
+        self.GYRO_SCALE = gamepad_hyperparams['gyro_scale']
+        self.GYRO_TO_RAD = np.pi / 180
+        self.AXIS_MAP = gamepad_hyperparams['axis_map']
+
+        self.imu = self.find_imu(self.device_name)
+        print(f'[RawIMUHandler] Using {self.imu.path} ({self.imu.name})')
+
+        self.state = {'ax': 0, 'ay': 0, 'az': 0, 'gx': 0, 'gy': 0, 'gz': 0}
+        self.state_converted = copy.deepcopy(self.state)
+
+        self.q_last = np.array([1.0, 0.0, 0.0, 0.0])  # last pose, output by get_latest_euler()
+        self.q_now = np.array([1.0, 0.0, 0.0, 0.0])   # current pose
+        self.q_real = np.array([1.0, 0.0, 0.0, 0.0])  # filtered current pose, but filter is not used for now
+        self.rpy_rel = np.zeros(3)  # q_now <- q_last + rpy_rel
+        self.rpy_now = np.zeros(3)  # 'sxyz' order of current pose ``q_now``
+        self.rpy_real = np.zeros(3)  # 'sxyz' order of filtered current pose ``q_real``
+        self.t_prev = None
+        self.t_start = None
+
+        # Multiprocessing related
+        self._reset_evt = mp.Event()
+        self._acquire_euler_evt = mp.Event()
+        self._euler_arr = mp.Array('d', 6)  # 共享欧拉角（rpy_real, rpy_rel）
+        self._quat_arr = mp.Array('d', 4)  # 共享四元数（q_real）
+        self._imu_arr = mp.Array('d', 6)  # shared IMU data (6 doubles)
+        self._lock = mp.Lock()
+        self._running = mp.Value('b', True)  # 控制子进程运行状态
+        self._process = mp.Process(target=self._imu_loop, args=(
+            self._lock, self._running
+        ))
+
+        # Calibration
+        self.bias_gyro = np.zeros(3)
+        self.bias_acc = np.zeros(3)
+        self.calibrate_imu()
+
+        # Start the IMU loop in a separate subprocess
+        self._process.start()
+
+    def _init_state(self):
+        # 原始积分相关
+        self.q_last = np.array([1.0, 0.0, 0.0, 0.0])
+        self.q_now = np.array([1.0, 0.0, 0.0, 0.0])
+        self.rpy_rel = np.zeros(3)
+        self.rpy_now = np.zeros(3)
+
+        # ESKF 滤波后“真实”姿态
+        self.q_real = np.array([1.0, 0.0, 0.0, 0.0])
+        self.rpy_real = np.zeros(3)
+
+        # 时间戳
+        self.t_prev = None
+        self.t_start = None
+
+        # 清空共享内存
+        with self._lock:
+            for i in range(6):
+                self._euler_arr[i] = 0.0
+            for i in range(4):
+                self._quat_arr[i] = 0.0
+            for i in range(6):
+                self._imu_arr[i] = 0.0
+
+    def calibrate_imu(self):
+        calib_samples = []
+        print(f"[RawIMUHandler] Calibrating... Please keep still...")
+
+        while len(calib_samples) < 3000:
+            r, _, _ = select.select([self.imu.fd], [], [], 0)
+            if r:
+                for evt in self.imu.read():
+                    if evt.type == ecodes.EV_ABS and evt.code in self.AXIS_MAP:
+                        self.state[self.AXIS_MAP[evt.code]] = evt.value
+                        if all(k in self.state for k in ('gx', 'gy', 'gz', 'ax', 'ay', 'az')):
+                            self.state_converted = self.cvt_imu_raw_data(self.state)
+                            omega = np.array(
+                                [self.state_converted['gx'], self.state_converted['gy'], self.state_converted['gz']])
+                            accel = np.array(
+                                [self.state_converted['ax'], self.state_converted['ay'], self.state_converted['az']])
+                            calib_samples.append((omega, accel))
+
+        gyros = np.array([o for o, a in calib_samples])
+        accs = np.array([a for o, a in calib_samples])
+
+        self.bias_gyro = np.mean(gyros, axis=0)
+        self.bias_acc = np.mean(accs, axis=0)
+
+        print(f"[校准完成] GYRO bias: {self.bias_gyro}, ACC bias: {self.bias_acc}")
+
+    def capture_imu_pose(self):
+        r, _, _ = select.select([self.imu.fd], [], [], 0)
+        if r:
+            for evt in self.imu.read():
+                if evt.type == ecodes.EV_ABS and evt.code in self.AXIS_MAP:
+                    self.state[self.AXIS_MAP[evt.code]] = evt.value
+                    ts = evt.timestamp()
+                    t_now = ts if isinstance(ts, float) else ts[0] + ts[1] * 1e-6
+
+                    if all(k in self.state for k in ('gx', 'gy', 'gz', 'ax', 'ay', 'az')):
+                        if self.t_start is None:
+                            self.t_start = t_now
+                        self.state_converted = self.cvt_imu_raw_data(self.state)
+                        gyro = np.array([
+                            self.state_converted['gx'],
+                            self.state_converted['gy'],
+                            self.state_converted['gz']
+                        ])
+                        acc = np.array([
+                            self.state_converted['ax'],
+                            self.state_converted['ay'],
+                            self.state_converted['az']
+                        ])
+
+                        gyro -= self.bias_gyro
+                        acc -= self.bias_acc
+
+                        if self.t_prev is not None:
+                            dt = t_now - self.t_prev
+                            omega = gyro * dt  # rad
+
+                            angle = np.linalg.norm(omega)
+                            if angle > 1e-13:
+                                axis = omega / angle
+                                dq = axangle2quat(axis, angle)
+                            else:
+                                dq = np.array([1.0, 0.0, 0.0, 0.0])
+
+                            # dq: 这次小变化, 1000Hz
+                            d_rpy = np.degrees(quat2euler(dq, axes='sxyz'))
+
+                            # 累加
+                            self.q_now = qmult(self.q_now, dq)
+                            self.rpy_now = np.degrees(quat2euler(self.q_now, axes='sxyz'))
+
+                            # no filters for now
+                            self.q_real = self.q_now
+                            self.rpy_real = self.rpy_now
+
+                        self.t_prev = t_now
+
+        return self.rpy_now, self.rpy_rel
+
+    def _imu_loop(self, lock, running):
+        print("[RawIMUHandler] IMU loop started")
+        while running.value:
+            if self._reset_evt.is_set():
+                self._reset_evt.clear()
+                self._init_state()
+
+            if self._acquire_euler_evt.is_set():
+                # Calculate: rpy_rel
+                # Set: q_last
+                self._acquire_euler_evt.clear()
+                dq = qmult(self.q_real, qinverse(self.q_last))
+                self.rpy_rel = quat2euler(dq, axes='sxyz')
+                self.q_last = self.q_real
+
+            self.capture_imu_pose()
+
+            with lock:
+                self._euler_arr[0] = self.rpy_real[0]
+                self._euler_arr[1] = self.rpy_real[1]
+                self._euler_arr[2] = self.rpy_real[2]
+                self._euler_arr[3] = self.rpy_rel[0]
+                self._euler_arr[4] = self.rpy_rel[1]
+                self._euler_arr[5] = self.rpy_rel[2]
+
+                self._quat_arr[0] = self.q_real[0]
+                self._quat_arr[1] = self.q_real[1]
+                self._quat_arr[2] = self.q_real[2]
+                self._quat_arr[3] = self.q_real[3]
+
+                self._imu_arr[0] = self.state_converted['ax']
+                self._imu_arr[1] = self.state_converted['ay']
+                self._imu_arr[2] = self.state_converted['az']
+                self._imu_arr[3] = self.state_converted['gx']
+                self._imu_arr[4] = self.state_converted['gy']
+                self._imu_arr[5] = self.state_converted['gz']
+
+    def reset_pose(self):
+        self._reset_evt.set()
+        print("[RawIMUHandler] Pose reset")
+
+    def get_latest_euler(self):
+        self._acquire_euler_evt.set()
+        with self._lock:
+            return {
+                'euler': np.array(self._euler_arr[:]),
+                'quat': np.array(self._quat_arr[:]),
+            }
+
+    def get_latest_imu(self):
+        with self._lock:
+            return {
+                'ax': self._imu_arr[0],
+                'ay': self._imu_arr[1],
+                'az': self._imu_arr[2],
+                'gx': self._imu_arr[3],
+                'gy': self._imu_arr[4],
+                'gz': self._imu_arr[5],
+            }
+
+    def stop(self):
+        self._running.value = False
+        self._process.join(timeout=1)
+
+    def cvt_imu_raw_data(self, raw_dict):
+        return {
+            'gx': ((raw_dict['gx']) * self.GYRO_SCALE) * self.GYRO_TO_RAD,
+            'gy': ((raw_dict['gy']) * self.GYRO_SCALE) * self.GYRO_TO_RAD,
+            'gz': ((raw_dict['gz']) * self.GYRO_SCALE) * self.GYRO_TO_RAD,
+            'ax': raw_dict['ax'] * self.ACC_SCALE,
+            'ay': raw_dict['ay'] * self.ACC_SCALE,
+            'az': raw_dict['az'] * self.ACC_SCALE,
+        }
 
     @staticmethod
     def find_imu(name_keyword='Pro Controller (IMU)'):
@@ -234,359 +448,14 @@ class IMUControl:
 
         glEnd()
 
-
-# class RawIMUHandler:
-#     def __init__(self, device_name="Pro Controller (IMU)"
-#                  ):
-#         self.device_name = device_name
-#         self.imu = self.find_imu(device_name)
-#         print(f'[RawIMUHandler] Using {self.imu.path} ({self.imu.name})')
-#
-#         # ---------- 初始化 ----------
-#         self.AXIS_MAP = {
-#             ecodes.ABS_RX: 'gx', ecodes.ABS_RY: 'gy', ecodes.ABS_RZ: 'gz',
-#             ecodes.ABS_X: 'ax', ecodes.ABS_Y: 'ay', ecodes.ABS_Z: 'az',
-#         }
-#         self.RAW2RAD = 2000.0 / 32767 * np.pi / 180
-#         self.RAW2ACC = 9.8 / 32767
-#
-#         self.GYRO_SCALE = 1 / 16.4  # °/s
-#         self.GYRO_TO_RAD = np.pi / 180
-#         self.ACC_SCALE = 9.8 * 8.0 / 32767  # m/s²
-#
-#         self.madgwick = Madgwick(sampleperiod=1 / 833)
-#         self.q_pose = np.array([1.0, 0.0, 0.0, 0.0])
-#         self.rpy_rel = np.array([0.0, 0.0, 0.0])
-#
-#         self.state = {'ax': 0, 'ay': 0, 'az': 0, 'gx': 0, 'gy': 0, 'gz': 0}
-#         self.state_converted = copy.deepcopy(self.state)
-#         self.t_prev = None
-#
-#         # Calibration
-#         GYRO_SCALE, DEADZONE, LPF_ALPHA, bias_gyro = 1., 0., 0., 0.
-#         self.GYRO_SCALE = GYRO_SCALE
-#         self.DEADZONE = DEADZONE
-#         self.LPF_ALPHA = LPF_ALPHA
-#         self.bias_gyro = bias_gyro
-#
-#         # 第一次滤波
-#         self.omega_filtered = np.zeros(3)
-#         self.omega_filtered_2nd = np.zeros(3)
-#
-#     def calibrate_imu(self):
-#         imu = self.imu
-#         state = self.state
-#         AXIS_MAP = self.AXIS_MAP
-#         RAW2RAD = self.RAW2RAD
-#         RAW2ACC = self.RAW2ACC
-#
-#         calib_samples = []
-#         print(f"[RawIMUHandler] calibrating...")
-#
-#         while len(calib_samples) < 800:
-#             r, _, _ = select.select([imu.fd], [], [], 0)
-#             if r:
-#                 try:
-#                     for evt in imu.read():
-#                         if evt.type == ecodes.EV_ABS and evt.code in AXIS_MAP:
-#                             state[AXIS_MAP[evt.code]] = evt.value
-#                             if all(k in state for k in ('gx', 'gy', 'gz', 'ax', 'ay', 'az')):
-#                                 omega_now = np.array([state['gx'], state['gy'], state['gz']]) * RAW2RAD
-#                                 accel_now = np.array([state['ax'], state['ay'], state['az']]) * RAW2ACC
-#                                 calib_samples.append((omega_now, accel_now))
-#                 except BlockingIOError:
-#                     pass
-#
-#         # 拆分样本
-#         gyro_samples = np.array([o for o, a in calib_samples])
-#         accel_samples = np.array([a for o, a in calib_samples])
-#
-#         # 陀螺仪校准
-#         bias_gyro = np.mean(gyro_samples, axis=0)
-#         gyro_std = np.std(gyro_samples, axis=0)
-#         GYRO_SCALE = 0.03
-#         DEADZONE_XYZ = 0.03 * gyro_std * GYRO_SCALE
-#         LPF_ALPHA = np.clip(np.linalg.norm(gyro_std) * 20, 0.01, 0.1)
-#
-#         # 加速度计 bias 校准
-#         bias_acc = np.mean(accel_samples, axis=0)
-#         print(f"[RawIMUHandler][校准完成]")
-#         print(f"  GYRO: bias={bias_gyro}, deadzone={DEADZONE_XYZ}, alpha={LPF_ALPHA:.5f}")
-#         print(f"  ACC : bias={bias_acc}")
-#
-#         # 存下来
-#         self.GYRO_SCALE = GYRO_SCALE
-#         self.DEADZONE = DEADZONE_XYZ
-#         self.LPF_ALPHA = LPF_ALPHA
-#         self.bias_gyro = bias_gyro
-#         self.bias_acc = bias_acc
-#
-#         return GYRO_SCALE, DEADZONE_XYZ, LPF_ALPHA, bias_gyro, bias_acc
-#
-#     def capture_imu_pose(self):
-#         imu = self.imu
-#         madgwick = self.madgwick
-#         AXIS_MAP = self.AXIS_MAP
-#         state = self.state
-#         RAW2RAD = self.RAW2RAD
-#         RAW2ACC = self.RAW2ACC
-#
-#         GYRO_SCALE = self.GYRO_SCALE
-#         LPF_ALPHA = self.LPF_ALPHA
-#         DEADZONE_XYZ = self.DEADZONE  # 注意现在是数组了
-#         bias_gyro = self.bias_gyro
-#
-#         q_pose_old = self.q_pose.copy()
-#         q_pose_new = self.q_pose.copy()
-#
-#         r, _, _ = select.select([imu.fd], [], [], 0)
-#         if r:
-#             try:
-#                 for evt in imu.read():
-#                     if evt.type == ecodes.EV_ABS and evt.code in AXIS_MAP:
-#                         state[AXIS_MAP[evt.code]] = evt.value
-#                         ts = evt.timestamp()
-#                         t_now = ts if isinstance(ts, float) else ts[0] + ts[1] * 1e-6
-#
-#                         if all(k in state for k in ('gx', 'gy', 'gz', 'ax', 'ay', 'az')):
-#                             omega_raw = np.array([state['gx'], state['gy'], state['gz']]) * RAW2RAD
-#                             accel_raw = np.array([state['ax'], state['ay'], state['az']]) * RAW2ACC
-#                             self.state_converted = self.cvt_imu_raw_data(state)
-#
-#                             omega = omega_raw
-#
-#                             # omega = (omega_raw - bias_gyro) * GYRO_SCALE
-#
-#                             # # 第一次滤波
-#                             # self.omega_filtered = (1.0 - LPF_ALPHA) * self.omega_filtered + LPF_ALPHA * omega
-#                             #
-#                             # # 第二次滤波
-#                             # if not hasattr(self, 'omega_filtered_2nd'):
-#                             #     self.omega_filtered_2nd = np.zeros(3)
-#                             # self.omega_filtered_2nd = ((1.0 - LPF_ALPHA) * self.omega_filtered_2nd +
-#                             #                            LPF_ALPHA * self.omega_filtered)
-#                             #
-#                             # # 分别判断每个轴是否小于对应 deadzone
-#                             # mask = np.abs(self.omega_filtered_2nd) < DEADZONE_XYZ
-#                             # self.omega_filtered_2nd = self.omega_filtered_2nd * (~mask)
-#
-#                             if self.t_prev is not None:
-#                                 dt = t_now - self.t_prev
-#                                 madgwick.sampleperiod = dt
-#                                 # q_pose_new = madgwick.updateIMU(copy.deepcopy(self.q_pose),
-#                                 #                                 gyr=self.omega_filtered_2nd,
-#                                 #                                 acc=accel_raw)
-#                                 q_pose_new = omega
-#                                 # q_rel = quat.qmult(quat.qinverse(q_pose_old), q_pose_new)
-#                                 # rpy_rel = IMUControl.quat2euler(q_rel)
-#                                 # self.rpy_rel = rpy_rel
-#
-#                             self.t_prev = t_now
-#             except BlockingIOError:
-#                 print("Error: BlockingIOError")
-#             except Exception as e:
-#                 print("Error: ", e)
-#
-#         self.q_pose = q_pose_new
-#         return self.q_pose, self.rpy_rel
-#
-#     @staticmethod
-#     def find_imu(name_keyword='Pro Controller (IMU)'):
-#         for path in list_devices():
-#             dev = InputDevice(path)
-#             if name_keyword in dev.name:
-#                 return dev
-#         raise RuntimeError('IMU 未找到')
-#
-#     def cvt_imu_raw_data(self, raw_dict):
-#         return {
-#             'gx': ((raw_dict['gx'] >> 13) * self.GYRO_SCALE) * self.GYRO_TO_RAD,  # rad/s
-#             'gy': ((raw_dict['gy'] >> 13) * self.GYRO_SCALE) * self.GYRO_TO_RAD,
-#             'gz': ((raw_dict['gz'] >> 13) * self.GYRO_SCALE) * self.GYRO_TO_RAD,
-#             'ax': raw_dict['ax'] * self.ACC_SCALE,  # m/s²
-#             'ay': raw_dict['ay'] * self.ACC_SCALE,
-#             'az': raw_dict['az'] * self.ACC_SCALE,
-#         }
-
-
-class ESKFIMU:
-    def __init__(self, dt=0.005):
-        self.dt = dt
-        self.q = R.from_quat([0, 0, 0, 1])  # 四元数: x, y, z, w
-        self.gyro_bias = np.zeros(3)
-        self.P = np.eye(6) * 0.01
-        self.Q = np.diag([1e-4]*3 + [1e-6]*3)
-        self.R = np.eye(3) * 0.02  # 更高信任加速度观测，提升响应速度
-        self.g = np.array([0.0, 0.0, -9.8])  # 重力方向（z向上）
-
-    def predict(self, gyro):
-        omega = gyro - self.gyro_bias
-        delta_theta = omega * self.dt
-        dq = R.from_rotvec(delta_theta)
-        self.q = self.q * dq  # 四元数更新
-
-        F = np.eye(6)
-        F[0:3, 0:3] -= self.skew(omega) * self.dt
-        F[0:3, 3:6] = -np.eye(3) * self.dt
-        self.P = F @ self.P @ F.T + self.Q
-
-    def update(self, acc):
-        acc_norm = acc / np.linalg.norm(acc)
-        acc_mag = np.linalg.norm(acc)
-
-        # 仅在接近重力时才进行更新，滤除运动中的线性加速度干扰
-        if np.abs(acc_mag - 9.8) > 0.5:
-            return  # 跳过更新，等待静止状态
-
-        g_b = self.q.inv().apply(self.g)
-        g_b_norm = g_b / np.linalg.norm(g_b)
-        y = acc_norm - g_b_norm
-
-        H = np.zeros((3, 6))
-        H[:, 0:3] = self.skew(g_b_norm)
-
-        S = H @ self.P @ H.T + self.R
-        K = self.P @ H.T @ np.linalg.inv(S)
-        delta_x = K @ y
-
-        delta_theta = delta_x[0:3]
-        delta_bias = delta_x[3:6]
-        angle = np.linalg.norm(delta_theta)
-
-        if np.isfinite(angle) and angle > 1e-8:
-            dq = R.from_rotvec(delta_theta)
-            self.q = dq * self.q
-
-        self.gyro_bias += delta_bias
-        self.P = (np.eye(6) - K @ H) @ self.P
-
-    def step(self, acc, gyro):
-        self.predict(gyro)
-        self.update(acc)
-
-    def get_euler(self):
-        return self.q.as_euler('xyz', degrees=True)
-
-    def skew(self, v):
-        return np.array([
-            [0, -v[2], v[1]],
-            [v[2], 0, -v[0]],
-            [-v[1], v[0], 0]
-        ])
-
-
-def is_static(acc, threshold=0.3, g=9.8):
-    return np.abs(np.linalg.norm(acc) - g) < threshold
-
-
-class RawIMUHandler:
-    def __init__(self, device_name="Pro Controller (IMU)"):
-        self.device_name = device_name
-        self.imu = self.find_imu(device_name)
-        print(f'[RawIMUHandler] Using {self.imu.path} ({self.imu.name})')
-
-        self.AXIS_MAP = {
-            ecodes.ABS_RX: 'gx', ecodes.ABS_RY: 'gy', ecodes.ABS_RZ: 'gz',
-            ecodes.ABS_X: 'ax', ecodes.ABS_Y: 'ay', ecodes.ABS_Z: 'az',
-        }
-
-        self.GYRO_SCALE = 1 / 16.4
-        self.GYRO_TO_RAD = np.pi / 180
-        self.ACC_SCALE = 9.8 * 8.0 / 32767
-
-        self.state = {'ax': 0, 'ay': 0, 'az': 0, 'gx': 0, 'gy': 0, 'gz': 0}
-        self.state_converted = copy.deepcopy(self.state)
-        self.t_prev = None
-
-        self.bias_gyro = np.zeros(3)
-        self.bias_acc = np.zeros(3)
-        self.eskf = ESKFIMU(dt=0.005)
-
-        self.q_pose = np.array([0.0, 0.0, 0.0, 1.0])
-        self.rpy_rel = np.array([0.0, 0.0, 0.0])
-        self.yaw_offset = 0.0
-
-        self.calibrate_imu()
-
-    def calibrate_imu(self):
-        calib_samples = []
-        print(f"[RawIMUHandler] Calibrating... Hold still...")
-
-        while len(calib_samples) < 800:
-            r, _, _ = select.select([self.imu.fd], [], [], 0)
-            if r:
-                for evt in self.imu.read():
-                    if evt.type == ecodes.EV_ABS and evt.code in self.AXIS_MAP:
-                        self.state[self.AXIS_MAP[evt.code]] = evt.value
-                        if all(k in self.state for k in ('gx', 'gy', 'gz', 'ax', 'ay', 'az')):
-                            self.state_converted = self.cvt_imu_raw_data(self.state)
-                            omega = np.array([self.state_converted['gx'], self.state_converted['gy'], self.state_converted['gz']])
-                            accel = np.array([self.state_converted['ax'], self.state_converted['ay'], self.state_converted['az']])
-                            calib_samples.append((omega, accel))
-
-        gyros = np.array([o for o, a in calib_samples])
-        accs = np.array([a for o, a in calib_samples])
-        self.bias_gyro = np.mean(gyros, axis=0)
-        self.bias_acc = np.mean(accs, axis=0)
-
-        print(f"[校准完成] GYRO bias: {self.bias_gyro}, ACC bias: {self.bias_acc}")
-        exit()
-
-    def capture_imu_pose(self):
-        r, _, _ = select.select([self.imu.fd], [], [], 0)
-        if r:
-            for evt in self.imu.read():
-                if evt.type == ecodes.EV_ABS and evt.code in self.AXIS_MAP:
-                    self.state[self.AXIS_MAP[evt.code]] = evt.value
-                    ts = evt.timestamp()
-                    t_now = ts if isinstance(ts, float) else ts[0] + ts[1] * 1e-6
-
-                    if all(k in self.state for k in ('gx', 'gy', 'gz', 'ax', 'ay', 'az')):
-                        self.state_converted = self.cvt_imu_raw_data(self.state)
-                        gyro = np.array(
-                            [self.state_converted['gx'], self.state_converted['gy'], self.state_converted['gz']])
-                        acc = np.array(
-                            [self.state_converted['ax'], self.state_converted['ay'], self.state_converted['az']])
-
-                        gyro -= self.bias_gyro
-                        acc -= self.bias_acc
-
-                        if self.t_prev is not None:
-                            dt = t_now - self.t_prev
-                            self.eskf.dt = dt
-                            self.eskf.predict(gyro)
-                            if is_static(acc):  # 静止时才更新姿态
-                                self.eskf.update(acc)
-
-                            self.q_pose = self.eskf.q.as_quat()
-                            rpy = self.eskf.get_euler()
-                            rpy[2] -= self.yaw_offset  # 减去 yaw 偏移
-                            self.rpy_rel = rpy
-
-                        self.t_prev = t_now
-        return self.q_pose, self.rpy_rel
-
-    def reset_yaw(self):
-        """将当前 yaw 视为 0°，后续角度以此为基准。"""
-        _, rpy = self.capture_imu_pose()
-        self.yaw_offset = rpy[2]
-        print(f"[RawIMUHandler] Yaw offset set to {self.yaw_offset:.2f} deg")
-
-    def cvt_imu_raw_data(self, raw_dict):
-        return {
-            'gx': ((raw_dict['gx'] >> 13) * self.GYRO_SCALE) * self.GYRO_TO_RAD,
-            'gy': ((raw_dict['gy'] >> 13) * self.GYRO_SCALE) * self.GYRO_TO_RAD,
-            'gz': ((raw_dict['gz'] >> 13) * self.GYRO_SCALE) * self.GYRO_TO_RAD,
-            'ax': raw_dict['ax'] * self.ACC_SCALE,
-            'ay': raw_dict['ay'] * self.ACC_SCALE,
-            'az': raw_dict['az'] * self.ACC_SCALE,
-        }
-
     @staticmethod
-    def find_imu(name_keyword='Pro Controller (IMU)'):
-        for path in list_devices():
-            dev = InputDevice(path)
-            if name_keyword in dev.name:
-                return dev
-        raise RuntimeError('IMU 未找到')
-
+    def display_rpy(screen, rpy):
+        """在 HUD 中显示 roll, pitch, yaw"""
+        try:
+            roll, pitch, yaw = rpy
+            font = pygame.font.Font(None, 36)
+            text = f"Roll: {np.degrees(roll):.2f}°  Pitch: {np.degrees(pitch):.2f}°  Yaw: {np.degrees(yaw):.2f}°"
+            text_surface = font.render(text, True, (255, 255, 255))
+            screen.blit(text_surface, (10, 10))
+        except Exception as e:
+            print(f"Error displaying RPY: {e}")

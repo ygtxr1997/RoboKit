@@ -7,7 +7,7 @@ import pygame
 import numpy as np
 
 from .robot_client import RobotClient
-from robokit.network.imu_control import IMUControl
+from robokit.network.imu_control import RawIMUHandler
 from robokit.data.data_handler import MultiDataHandler
 from robokit.data.realsense_handler import RealsenseHandler
 
@@ -453,6 +453,130 @@ class SwitchProIMUController(SwitchProController):
 
     def on_angular_button_released(self):
         self.imu_controller.rpy_rel = [0., 0., 0.]
+
+
+class PS5DualSenseController(BaseController):
+    def __init__(self, robot: RobotClient, joystick_idx: int = 0,
+                 saving_root: str = "collected_data_0422/",
+                 **kwargs
+                 ):
+        BaseController.__init__(self, robot, saving_root=saving_root, **kwargs)
+        """
+        PS5DualSense (Ubuntu)
+        Left Stick 0639:    A1, A1, A0, A0
+        Right Stick 0639:   A4, A5, A3, A3
+        A, B, X, Y:          1,  0,  2,  3
+        LB/L1, RB/R1:        4,  5,
+        LT/L2, RT/R2:        6,  7,
+        screen:              8,
+        menu:                9,
+        share:              10,
+        """
+        self.joystick_idx = joystick_idx
+        self.joystick = pygame.joystick.Joystick(joystick_idx)
+        self.joystick.init()
+
+        self.linear_scale = 0.1
+        self.angular_scale = 0.5
+        print("[PS5DualSenseController] Initialized")
+
+    def get_joy_axis(self, axis: int, axis_eps: float = 8e-2):
+        demand = self.joystick.get_axis(axis)
+        if abs(demand) < axis_eps:
+            demand = 0  # Applying dead band to avoid drift when joystick is released
+        return demand
+
+    def update_state(self):
+        pass  # do nothing
+
+    def update_xyz(self):
+        """ stand as the robot, x:right, y:front, z:up
+            face to the robot, x:left, y:front, z:up
+        """
+        x = -self.get_joy_axis(0)
+        y = self.get_joy_axis(1)
+        z = -self.get_joy_axis(4)
+        z_39 = -self.get_joy_axis(3)
+        self.linear_xyz = {'x': x, 'y': y, 'z': z}
+        self.angular_xyz = {'x': x, 'y': y, 'z': z}
+        self.z_39 = z_39
+
+    def update_g(self):
+        """ Although DualSense has linear trigger, but there is no need to use it """
+        if self.joystick.get_button(7):
+            self.g = 1.  # pressed -> close
+        else:
+            self.g = 0.  # released -> open
+
+    def is_exit_pressed(self):
+        return self.joystick.get_button(10)
+
+    def is_back_pressed(self):
+        return self.joystick.get_button(0)
+
+    def get_pause_button(self):
+        return 9  # button number
+
+    def get_angular_button(self):
+        return 4
+
+    def is_linear_jog_pressed(self):
+        return self.joystick.get_button(5)
+
+    def is_angular_jog_pressed(self):
+        return self.joystick.get_button(4)
+
+    def is_start_episode_pressed(self) -> bool:
+        return self.joystick.get_button(2)
+
+    def is_end_episode_pressed(self) -> bool:
+        return self.joystick.get_button(3)
+
+    def on_rumble(self) -> None:
+        self.joystick.rumble(0.4, 0.4, 300)
+
+
+class PS5DualSenseIMUController(PS5DualSenseController):
+    def __init__(self, robot: RobotClient, joystick_idx: int = 0,
+                 saving_root: str = "collected_data_0422/",
+                 **kwargs
+                 ):
+        PS5DualSenseController.__init__(self, robot, joystick_idx=joystick_idx,
+                                     saving_root=saving_root, **kwargs)
+        self.imu_controller = RawIMUHandler()
+        self.angular_scale = 1.
+
+    def update_xyz(self):
+        x = -self.get_joy_axis(0)
+        y = self.get_joy_axis(1)
+        z = -self.get_joy_axis(3)
+        self.linear_xyz = {'x': x, 'y': y, 'z': z}
+
+        imu_data = self.imu_controller.get_latest_euler()
+        rpy_rel = imu_data['euler']
+        roll, pitch, yaw = rpy_rel
+        self.angular_xyz = {'x': roll, 'y': pitch, 'z': yaw}
+        self.z_39 = 0.
+
+    def on_angular_jog(self, xyz: dict = None, z_39: float = None) -> None:
+        """ Also let linear axes move """
+        linear_scaled_xyz = {k: v * self.linear_scale for k, v in self.linear_xyz.items()}
+
+        self.angular_xyz = xyz if xyz is not None else self.angular_xyz
+        self.z_39 = z_39 if z_39 is not None else self.z_39
+        scaled_xyz = self.angular_xyz.copy()
+        scaled_xyz['x'] = self.angular_xyz['y']
+        scaled_xyz['y'] = -self.angular_xyz['x']
+        scaled_xyz['z'] = scaled_xyz['z'] if abs(scaled_xyz['z']) > abs(self.z_39) else self.z_39
+        scaled_xyz = {k: v * self.angular_scale for k, v in scaled_xyz.items()}
+
+        self.robot.lin_ang_jog_pub(linear_scaled_xyz, scaled_xyz)
+
+    def on_angular_button_released(self):
+        self.imu_controller.reset_pose()
+
+    def on_before_exit(self) -> None:
+        self.imu_controller.stop()
 
 
 class KeyboardController:
