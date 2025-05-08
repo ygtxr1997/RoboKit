@@ -6,6 +6,7 @@ from io import BytesIO
 import os
 import multiprocessing as mp
 from datetime import datetime
+import time
 
 
 class DataHandler:
@@ -53,7 +54,7 @@ class DataHandler:
 
         # 使用 numpy 保存数据为 .npz 文件，存储字节流数据
         np.savez_compressed(file_path, **pickled_data)
-        print(f"数据已保存为 {file_path}")
+        print(f"Data saved as: {file_path}")
 
     @classmethod
     def load(cls, file_path: str):
@@ -188,6 +189,7 @@ class ForkedDataSaver:
         while True:
             item = queue.get()
             if item is None:
+                print("[ForkedDataSaver] item is None, existing loop!")
                 break
             data_dict, file_path = item
             try:
@@ -206,11 +208,24 @@ class ForkedDataSaver:
             print(f"[Warning] Save queue full (>{self.max_queue_size}). Data dropped.")
         return file_path
 
+    def save_remaining(self, check_interval=0.1, verbose=True):
+        while True:
+            remaining = self.queue.qsize()
+            if remaining == 0:
+                if verbose:
+                    print("[ForkedDataSaver] Queue fully processed. No remaining data.")
+                break
+            if verbose:
+                print(f"[ForkedDataSaver] Waiting... {remaining} item(s) remaining in queue.")
+            time.sleep(check_interval)
+
     def close(self):
         remaining = self.queue.qsize()
-        print(f"[ForkedDataSaver] Remaining: {remaining}")
+        print(f"[ForkedDataSaver] Closing. Remaining: {remaining}")
 
         for _ in self.workers:
             self.queue.put(None)
         for w in self.workers:
             w.join()
+
+        print("[ForkedDataSaver] All saver workers exited.")

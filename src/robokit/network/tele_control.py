@@ -2,6 +2,7 @@ import os
 import time
 from datetime import datetime
 import enum
+from typing import Dict, List, Tuple
 from abc import ABC, abstractmethod
 import pygame
 import numpy as np
@@ -21,7 +22,12 @@ class GameState(enum.Enum):
 
 class BaseController:
     def __init__(self, robot: RobotClient, saving_root: str,
+                 task_instruction: str,
+                 action_fps: int = 30,
                  enable_auto_ae_wb: bool = True,
+                 ae_wb_params: List[Dict] = None,
+                 # Data saving
+                 saving_workers: int = 6,
                  ):
         pygame.font.init()
         pygame.display.init()
@@ -33,7 +39,7 @@ class BaseController:
         self.robot = robot
         self.linear_scale = 0.1
         self.angular_scale = 0.1
-        self.fps = 30
+        self.fps = action_fps
 
         # Dynamic
         self.linear_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
@@ -57,13 +63,23 @@ class BaseController:
         # Cameras
         self.camera = RealsenseHandler(frame_rate=60)
         self.camera.set_ae_wb_auto(enable_auto_ae_wb)
+        self.ae_wb_params = ae_wb_params
         if not enable_auto_ae_wb:
-            self.camera.set_ae_wb(exposure=50)
-        self.data_manager = ForkedDataSaver(num_workers=6)
+            if self.ae_wb_params is None:
+                self.ae_wb_params = [{
+                    "camera_idx": -1,
+                    "exposure": 50,
+                }]  # default ae_wb_params
+            for ae_wb_param in self.ae_wb_params:
+                self.camera.set_ae_wb(**ae_wb_param)
+
+        # Data saving
+        self.data_manager = ForkedDataSaver(num_workers=saving_workers)
         self.need_saving = False
         self.saving_root = saving_root
         self.saving_dir: str = None
         self.saving_frame_idx: int = 0
+        self.task_instruction = task_instruction
 
     def get_datetime_str(self):
         current_time = datetime.now()
@@ -75,23 +91,33 @@ class BaseController:
         toggle_flag = False
         last_game_time = pygame.time.get_ticks()
 
+        back_home_pressed = False
+        start_episode_pressed = False
+        end_episode_pressed = False
+
         while self.game_state != GameState.STOPPED:
             # Joystick FPS
             current_time = pygame.time.get_ticks()
             self.screen.fill((255, 255, 255))
 
-            angular_release = False
             for event in pygame.event.get():
                 if event.type == pygame.JOYBUTTONDOWN:
                     if event.button == self.get_pause_button() and not toggle_flag:
                         self.switch_pause()
                         toggle_flag = True  # 状态切换后标记为已切换
+                    elif event.button == self.get_back_home_button():
+                        back_home_pressed = True
+                    elif event.button == self.get_start_episode_button():
+                        start_episode_pressed = True
+                    elif event.button == self.get_end_episode_button():
+                        end_episode_pressed = True
+
                 elif event.type == pygame.JOYBUTTONUP:
                     if event.button == self.get_pause_button():
                         toggle_flag = False  # 当按钮释放时允许再次切换
                     elif event.button == self.get_angular_button():
-                        angular_release = True
                         self.on_angular_button_released()
+
 
             self.update_state()
             self.update_xyz()
@@ -132,8 +158,8 @@ class BaseController:
                 if self.game_state == GameState.PAUSED:
                     pass
                 else:
-                    # Check Back Home
-                    if self.is_back_pressed():
+                    if back_home_pressed:
+                        back_home_pressed = False
                         self.on_back_home()
 
                     # Check XYZ Move
@@ -150,9 +176,11 @@ class BaseController:
                     self.on_gripper_move()
 
                     # Check Episode start end
-                    if self.is_start_episode_pressed():
+                    if start_episode_pressed:
+                        start_episode_pressed = False
                         self.on_start_episode()
-                    elif self.is_end_episode_pressed():
+                    elif end_episode_pressed:
+                        end_episode_pressed = False
                         self.on_end_episode()
 
                 # Save data
@@ -163,20 +191,20 @@ class BaseController:
                     start_time = pygame.time.get_ticks()
                     camera_data = self.camera.capture_frames()
                     # print("[DEBUG] Get camera data cost:", pygame.time.get_ticks() - start_time)
-                    task_instruction = "pick up the banana"
+                    task_instruction = self.task_instruction  # "pick up the banana"
                     start_time = pygame.time.get_ticks()
                     robot_data = self.robot.get_current_frame_info()
                     # print("[DEBUG] Get robot data cost:", pygame.time.get_ticks() - start_time)
 
-                    # Note: if not set linear_jog to zero, will save wrong data
-                    zero_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
-                    if self.is_linear_jog_pressed():
-                        robot_data['jog_angular'] = zero_xyz
-                    elif self.is_angular_jog_pressed():
-                        robot_data['jog_linear'] = zero_xyz
-                    else:
-                        robot_data['jog_angular'] = zero_xyz
-                        robot_data['jog_linear'] = zero_xyz
+                    # # Note: if not set linear_jog to zero, will save wrong data
+                    # zero_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+                    # if self.is_linear_jog_pressed():
+                    #     robot_data['jog_angular'] = zero_xyz
+                    # elif self.is_angular_jog_pressed():
+                    #     robot_data['jog_linear'] = zero_xyz
+                    # else:
+                    #     robot_data['jog_angular'] = zero_xyz
+                    #     robot_data['jog_linear'] = zero_xyz
 
                     frame_actions = np.array([
                         robot_data['jog_linear']['x'],
@@ -216,13 +244,12 @@ class BaseController:
                         "robot_obs": frame_robot_obs,
                     }
 
-                    save_fn = f"{self.saving_frame_idx:06d}.npz"
+                    save_fn = f"{self.saving_frame_idx:06d}.npz"  # data_manager will handle the filename
                     save_path = os.path.join(self.saving_dir, save_fn)
                     self.data_manager.submit(frame_data_dict, self.saving_dir, file_path=None)
                     start_time = pygame.time.get_ticks()
-                    # self.data_manager.save_data()
-                    print("[DEBUG] Saving data cost:", pygame.time.get_ticks() - start_time)
-                    print("---" * 30)
+                    # print("[DEBUG] Saving data cost:", pygame.time.get_ticks() - start_time)
+                    # print("---" * 30)
                     self.saving_frame_idx += 1
 
             # Framerate setting
@@ -233,6 +260,7 @@ class BaseController:
         self.on_before_exit()
         self.game_state = GameState.STOPPED
         pygame.quit()
+        self.data_manager.close()
         self.robot.arm_power_off()
         self.on_after_exit()
 
@@ -266,20 +294,21 @@ class BaseController:
     @abstractmethod
     def is_exit_pressed(self) -> bool: pass
     @abstractmethod
-    def is_back_pressed(self) -> bool: pass
+    def get_back_home_button(self) -> bool: pass
     @abstractmethod
     def get_pause_button(self) -> int: pass
     @abstractmethod
     def get_angular_button(self) -> int: pass
     @abstractmethod
+    def get_start_episode_button(self) -> int: pass
+    @abstractmethod
+    def get_end_episode_button(self) -> int: pass
+
+    @abstractmethod
     def is_linear_jog_pressed(self) -> bool: pass
     @abstractmethod
     def is_angular_jog_pressed(self) -> bool: pass
 
-    @abstractmethod
-    def is_start_episode_pressed(self) -> bool: pass
-    @abstractmethod
-    def is_end_episode_pressed(self) -> bool: pass
     @abstractmethod
     def on_rumble(self) -> None: pass
 
@@ -323,18 +352,19 @@ class BaseController:
         self.saving_dir = os.path.join(self.saving_root, self.get_datetime_str())
         self.saving_frame_idx = 0
         self.on_rumble()
-        print("Episode Started")
+        time.sleep(0.1)
+        print("[tele_control] Episode Started")
 
     def on_end_episode(self) -> None:
         self.need_saving = False
         self.saving_dir = None
         self.saving_frame_idx = 0
-        print("Episode Ended")
+        print("[tele_control] Episode Ended")
         self.on_rumble()
-        print("Waiting for saving last data in queue")
-        self.data_manager.close()
-        print("Last data saved.")
-        self.on_back_home()
+        time.sleep(0.1)
+        print("[tele_control] Waiting for saving last data in queue")
+        self.data_manager.save_remaining()
+        # self.on_back_home()
 
 
 class SwitchProController(BaseController):
@@ -394,8 +424,8 @@ class SwitchProController(BaseController):
     def is_exit_pressed(self):
         return self.joystick.get_button(11)
 
-    def is_back_pressed(self):
-        return self.joystick.get_button(0)
+    def get_back_home_button(self):
+        return 0
 
     def get_pause_button(self):
         return 10  # button number
@@ -409,11 +439,11 @@ class SwitchProController(BaseController):
     def is_angular_jog_pressed(self):
         return self.joystick.get_button(5)
 
-    def is_start_episode_pressed(self) -> bool:
-        return self.joystick.get_button(2)
+    def get_start_episode_button(self) -> int:
+        return 2
 
-    def is_end_episode_pressed(self) -> bool:
-        return self.joystick.get_button(3)
+    def get_end_episode_button(self) -> int:
+        return 3
 
     def on_rumble(self) -> None:
         self.joystick.rumble(0.4, 0.4, 300)
@@ -514,8 +544,8 @@ class PS5DualSenseController(BaseController):
     def is_exit_pressed(self):
         return self.joystick.get_button(10)
 
-    def is_back_pressed(self):
-        return self.joystick.get_button(0)
+    def get_back_home_button(self):
+        return 0
 
     def get_pause_button(self):
         return 9  # button number
@@ -529,11 +559,11 @@ class PS5DualSenseController(BaseController):
     def is_angular_jog_pressed(self):
         return self.joystick.get_button(4)
 
-    def is_start_episode_pressed(self) -> bool:
-        return self.joystick.get_button(2)
+    def get_start_episode_button(self) -> int:
+        return 2
 
-    def is_end_episode_pressed(self) -> bool:
-        return self.joystick.get_button(3)
+    def get_end_episode_button(self) -> int:
+        return 3
 
     def on_rumble(self) -> None:
         self.joystick.rumble(0.2, 0.4, 100)
@@ -554,15 +584,6 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         y = self.get_joy_axis(1)
         z = -self.get_joy_axis(4)
         self.linear_xyz = {'x': x, 'y': y, 'z': z}
-
-        # start = time.time()
-        # euler_data = self.imu_controller.get_latest_euler()
-        # print(f"[PS5DualSenseIMUController] Euler data received. time={(time.time()-start) * 1000:.2f} ms")
-        # # rpy_now = euler_data['euler'][:3]
-        # rpy_rel = euler_data['euler'][3:6]
-        # roll, pitch, yaw = rpy_rel
-        # self.angular_xyz = {'x': roll, 'y': pitch, 'z': yaw}
-        # self.z_39 = 0.
 
     def on_angular_jog(self, xyz: dict = None, z_39: float = None) -> None:
         """ Also let linear axes move """

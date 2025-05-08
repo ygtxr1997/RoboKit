@@ -112,6 +112,7 @@ class RobotClient:
         self.joint_names = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
         self.message_linear_jog: dict = {'x': 0, 'y':0, 'z': 0}
         self.message_angular_jog: dict = {'x': 0, 'y':0, 'z': 0}
+        self.message_zero_jog: dict = {'x': 0, 'y': 0, 'z': 0}
 
     #### TOPIC FUNCTIONS ####
     def gripper_status(self, message):
@@ -296,6 +297,7 @@ class RobotClient:
     def linear_jog_pub(self, message):
         client = self._ros
         self.message_linear_jog = message
+        self.message_angular_jog = self.message_zero_jog  # set angular as zero
         publisher = roslibpy.Topic(
             client, '/default_move_group/cartesian_jog',
             'commander_msgs/CartesianJogDemand')
@@ -303,6 +305,7 @@ class RobotClient:
 
     def ang_jog_pub(self, message: dict):
         client = self._ros
+        self.message_linear_jog = self.message_zero_jog  # set linear as zero
         self.message_angular_jog = message
         publisher = roslibpy.Topic(
             client, '/default_move_group/cartesian_jog',

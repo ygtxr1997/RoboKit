@@ -16,8 +16,9 @@ gpu_connector = ServiceConnector(base_url="http://localhost:6060")
 evaluator = RealWorldEvaluator(
     gpu_service_connector=gpu_connector,
     robot=robot_client,
-    run_loops=1000,
+    run_loops=5000,
     img_hw=(480, 848),
     enable_auto_ae_wb=True,
+    fps=30,
 )  # TODO: better AE-WB setting
 evaluator.run()

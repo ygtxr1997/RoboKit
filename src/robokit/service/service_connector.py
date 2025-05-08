@@ -37,13 +37,13 @@ class ServiceConnector:
         Output: actions predicted by the agent
         """
         primary_base64 = self.img_np_to_base64(primary_rgb)
-        # gripper_base64 = self.img_np_to_base64(gripper_rgb)
+        gripper_base64 = self.img_np_to_base64(gripper_rgb)
 
         response = self.http_session.post(
             f"{self.base_url}/step",
             json={
                 "primary_rgb": primary_base64,
-                "gripper_rgb": "none",  # to save network bandwidth
+                "gripper_rgb": gripper_base64,  # to save network bandwidth
                 "instruction": task_description,
                 "joint_state": joint_state,
             }

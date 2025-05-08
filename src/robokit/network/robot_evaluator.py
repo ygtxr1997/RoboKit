@@ -27,7 +27,7 @@ class RealWorldEvaluator:
         self.start_time = time.time()
 
         self.fps = fps
-        self.camera = RealsenseHandler(frame_rate=30)
+        self.camera = RealsenseHandler(frame_rate=60)
         self.camera.set_ae_wb_auto(enable_auto_ae_wb)
         if not enable_auto_ae_wb:
             self.camera.set_ae_wb(exposure=100)
@@ -37,6 +37,7 @@ class RealWorldEvaluator:
         self.g = 0.
         self.frame_buffer = {
             'primary_rgb': [],
+            'gripper_rgb': [],
             'joint_state': [],
         }  # some policies require 2 or more observation frames
 
@@ -83,19 +84,23 @@ class RealWorldEvaluator:
 
                 if len(self.frame_buffer['primary_rgb']) == 0:
                     self.frame_buffer['primary_rgb'].append(cur_primary_rgb)
+                    self.frame_buffer['gripper_rgb'].append(cur_gripper_rgb)
                     self.frame_buffer['joint_state'].append(cur_joint_state)
                     cur_primary_rgb = np.stack([np.zeros_like(cur_primary_rgb), cur_primary_rgb])
                     cur_joint_state = [[0.] * len(cur_joint_state), cur_joint_state]
                 elif len(self.frame_buffer['primary_rgb']) == 1:
                     self.frame_buffer['primary_rgb'].append(cur_primary_rgb)
+                    self.frame_buffer['gripper_rgb'].append(cur_gripper_rgb)
                     self.frame_buffer['joint_state'].append(cur_joint_state)
                     cur_primary_rgb = np.stack(self.frame_buffer['primary_rgb'])
                     cur_joint_state = self.frame_buffer['joint_state']
                 else:
                     assert len(self.frame_buffer['primary_rgb']) == 2
                     cur_primary_rgb = np.stack(self.frame_buffer['primary_rgb'])
+                    cur_gripper_rgb = np.stack(self.frame_buffer['gripper_rgb'])
                     cur_joint_state = list(self.frame_buffer['joint_state'])
                     self.frame_buffer['primary_rgb'].pop(0)
+                    self.frame_buffer['gripper_rgb'].pop(0)
                     self.frame_buffer['joint_state'].pop(0)
 
                 # 2. Send observation to GPU model, to get action

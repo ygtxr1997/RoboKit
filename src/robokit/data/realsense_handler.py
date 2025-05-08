@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 from pyrealsense2 import hole_filling_filter
+import copy
 from tqdm import tqdm
 import json
 import cv2
@@ -136,12 +137,19 @@ class RealsenseHandler(object):
             now_exposure = color_sensor.get_option(rs.option.exposure)
             now_gamma = color_sensor.get_option(rs.option.gamma)
             now_saturation = color_sensor.get_option(rs.option.saturation)
-            print(now_hue, now_wb, now_exposure, now_gamma, now_saturation)
+            print("[RealsenseHandler] current ae_wb:", now_hue, now_wb, now_exposure, now_gamma, now_saturation)
 
             color_sensor.set_option(rs.option.white_balance, wb)  # 1000:cool, 7000:warm
             color_sensor.set_option(rs.option.hue, hue)  # -10:red, +10:green
             color_sensor.set_option(rs.option.exposure, exposure)
             color_sensor.set_option(rs.option.saturation, saturation)
+
+            now_hue = color_sensor.get_option(rs.option.hue)
+            now_wb = color_sensor.get_option(rs.option.white_balance)
+            now_exposure = color_sensor.get_option(rs.option.exposure)
+            now_gamma = color_sensor.get_option(rs.option.gamma)
+            now_saturation = color_sensor.get_option(rs.option.saturation)
+            print("[RealsenseHandler] set ae_wb:", now_hue, now_wb, now_exposure, now_gamma, now_saturation)
 
     def set_ae_wb_auto(self, auto_adjust: bool = True, camera_idx: int = -1):
         if self.auto_just_wb == auto_adjust:
@@ -197,10 +205,10 @@ class RealsenseHandler(object):
         color_frame2 = frames2.get_color_frame()
 
         # 将图像转换为numpy数组
-        color_image1 = np.asanyarray(color_frame1.get_data())  # BGR
-        depth_image1 = np.asanyarray(depth_frame1.get_data())  # in [0,65535]
-        color_image2 = np.asanyarray(color_frame2.get_data())  # BGR
-        depth_image2 = np.asanyarray(depth_frame2.get_data())  # in [0,65535]
+        color_image1 = copy.deepcopy(np.asanyarray((color_frame1.get_data())))  # BGR
+        depth_image1 = copy.deepcopy(np.asanyarray((depth_frame1.get_data())))  # in [0,65535]
+        color_image2 = copy.deepcopy(np.asanyarray((color_frame2.get_data())))  # BGR
+        depth_image2 = copy.deepcopy(np.asanyarray((depth_frame2.get_data())))  # in [0,65535]
 
         def map_depth_with_color(depth_image: np.ndarray) -> Image.Image:
             depth_colored = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)

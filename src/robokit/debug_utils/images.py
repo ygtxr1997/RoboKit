@@ -37,40 +37,51 @@ def concatenate_rgb_images(img1, img2, vertical=False, smaller_size=2):
 
 
 def plot_action_wrt_time(action_data: np.ndarray):
-    # 创建一个图形和坐标轴
-    fig, ax = plt.subplots(figsize=(8, 6))
-
-    # 初始化曲线
     frames_cnt = action_data.shape[0]
-    line_styles = ['solid'] * 3 + ['dashed'] * 3 + ['dotted'] * 1
-    labels = ['x', 'y', 'z', 'a', 'b', 'c', 'g']
-    lines = [ax.plot([], [], label=labels[i], linestyle=line_styles[i])[0] for i in range(len(line_styles))]
-    ax.set_xlim(0, frames_cnt)
-    ax.set_ylim(np.min(action_data), np.max(action_data))
-    ax.set_xlabel('Time (Frames)')
-    ax.set_ylabel('Value')
-    ax.legend()
 
-    # 用于保存每一帧的图像列表
+    # 创建一个图和两个子图（1行2列）
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
+
+    # --- 子图1：x, y, z ---
+    labels_xyz = ['x', 'y', 'z']
+    styles_xyz = ['solid', 'solid', 'solid']
+    lines_xyz = [ax1.plot([], [], label=label, linestyle=style)[0] for label, style in zip(labels_xyz, styles_xyz)]
+    ax1.set_xlim(0, frames_cnt)
+    ax1.set_ylim(np.min(action_data[:, :3])-0.02, np.max(action_data[:, :3])+0.02)
+    ax1.set_xlabel('Time (Frames)')
+    ax1.set_ylabel('XYZ')
+    ax1.legend()
+
+    # --- 子图2：a, b, c, g ---
+    labels_abcg = ['a', 'b', 'c', 'g']
+    styles_abcg = ['dashed', 'dashed', 'dashed', 'dotted']
+    lines_abcg = [ax2.plot([], [], label=label, linestyle=style)[0] for label, style in zip(labels_abcg, styles_abcg)]
+    ax2.set_xlim(0, frames_cnt)
+    ax2.set_ylim(np.min(action_data[:, 3:])-0.02, np.max(action_data[:, 3:])+0.02)
+    ax2.set_xlabel('Time (Frames)')
+    ax2.set_ylabel('ABCG')
+    ax2.legend()
+
+    # 帧图列表
     frames = []
 
-    # 手动绘制每一帧并将其保存到列表
     for frame_num in range(frames_cnt):
-        # 更新曲线数据
-        for i, line in enumerate(lines):
-            line.set_data(np.arange(frame_num), action_data[:frame_num, i])  # 更新数据
+        # 更新 xyz 曲线
+        for i, line in enumerate(lines_xyz):
+            line.set_data(np.arange(frame_num), action_data[:frame_num, i])
+
+        # 更新 abcg 曲线
+        for i, line in enumerate(lines_abcg):
+            line.set_data(np.arange(frame_num), action_data[:frame_num, i + 3])
 
         plt.tight_layout()
-
-        # 将当前帧保存到帧列表中
         fig.canvas.draw()
         img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
         img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        # img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)  # 转换为 BGR 格式
-        frames.append(img)  # 将图像添加到帧列表中
+        frames.append(img)
 
     plt.close(fig)
-    return frames, fig, ax
+    return frames, fig, (ax1, ax2)
 
 
 class DynamicDataDrawer(ABC):
