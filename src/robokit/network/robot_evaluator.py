@@ -87,12 +87,14 @@ class RealWorldEvaluator:
                     self.frame_buffer['gripper_rgb'].append(cur_gripper_rgb)
                     self.frame_buffer['joint_state'].append(cur_joint_state)
                     cur_primary_rgb = np.stack([np.zeros_like(cur_primary_rgb), cur_primary_rgb])
+                    cur_gripper_rgb = np.stack([np.zeros_like(cur_gripper_rgb), cur_gripper_rgb])
                     cur_joint_state = [[0.] * len(cur_joint_state), cur_joint_state]
                 elif len(self.frame_buffer['primary_rgb']) == 1:
                     self.frame_buffer['primary_rgb'].append(cur_primary_rgb)
                     self.frame_buffer['gripper_rgb'].append(cur_gripper_rgb)
                     self.frame_buffer['joint_state'].append(cur_joint_state)
                     cur_primary_rgb = np.stack(self.frame_buffer['primary_rgb'])
+                    cur_gripper_rgb = np.stack(self.frame_buffer['gripper_rgb'])
                     cur_joint_state = self.frame_buffer['joint_state']
                 else:
                     assert len(self.frame_buffer['primary_rgb']) == 2

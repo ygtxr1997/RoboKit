@@ -12,13 +12,15 @@ client.run()
 print('Verifying the ROS target is connected?', client.is_connected)
 robot_client = RobotClient(client)
 
+# debug: 6060
+# zhihao: 6260
 gpu_connector = ServiceConnector(base_url="http://localhost:6060")
 evaluator = RealWorldEvaluator(
     gpu_service_connector=gpu_connector,
     robot=robot_client,
     run_loops=5000,
     img_hw=(480, 848),
-    enable_auto_ae_wb=True,
+    enable_auto_ae_wb=False,
     fps=30,
 )  # TODO: better AE-WB setting
 evaluator.run()
