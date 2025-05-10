@@ -1,13 +1,17 @@
 import warnings
+from typing import List
 import numpy as np
 import pickle
 from PIL import Image
 from io import BytesIO
 import os
+import multiprocessing as mp
+from datetime import datetime
+import time
 
 
 class DataHandler:
-    def __init__(self, data_dict: dict):
+    def __init__(self, data_dict: dict, verbose=False):
         """初始化 DataHandler
         Example:
         data_dict = {
@@ -24,7 +28,7 @@ class DataHandler:
         """
         self.data_dict = data_dict
 
-        if not self._validate_data(data_dict):
+        if not self._validate_data(data_dict, verbose=verbose):
             raise ValueError("数据字典格式无效！")
 
     def update(self, data_dict: dict):
@@ -51,10 +55,10 @@ class DataHandler:
 
         # 使用 numpy 保存数据为 .npz 文件，存储字节流数据
         np.savez_compressed(file_path, **pickled_data)
-        print(f"数据已保存为 {file_path}")
+        print(f"Data saved as: {file_path}")
 
     @classmethod
-    def load(cls, file_path: str):
+    def load(cls, file_path: str, load_keys: List[str]):
         """加载 .npz 文件并恢复数据"""
         try:
             if not os.path.exists(file_path):
@@ -65,6 +69,8 @@ class DataHandler:
 
             data_dict = {}
             for key in npzfile.files:
+                if key not in load_keys:
+                    continue  # skip some unused keys
                 # 读取并反序列化每个数据项
                 if key in ['primary_rgb', 'gripper_rgb',
                            'primary_depth', 'gripper_depth',
@@ -90,7 +96,7 @@ class DataHandler:
         else:
             raise KeyError(f"字典中没有 {key} 这一项！")
 
-    def _validate_data(self, data_dict):
+    def _validate_data(self, data_dict, verbose=False):
         """验证数据字典的格式和类型"""
         expected_keys = {
             "primary_rgb": np.ndarray,
@@ -102,12 +108,13 @@ class DataHandler:
             "rel_actions": np.ndarray,
             "robot_obs": np.ndarray,
         }
-        if isinstance(data_dict['language_text'], str):
+        if 'language_text' in data_dict.keys() and isinstance(data_dict['language_text'], str):
             data_dict['language_text'] = np.array(data_dict['language_text'])
 
         for key, expected_type in expected_keys.items():
             if key not in data_dict:
-                print(f"[Warning] 缺少关键项：{key}")
+                if verbose:
+                    print(f"[Warning] missing：{key}")
                 continue
             if not isinstance(data_dict[key], expected_type):
                 print(f"项 {key} 的类型不匹配，预期类型 {expected_type}，实际类型 {type(data_dict[key])}")
@@ -155,11 +162,74 @@ class MultiDataHandler:
         self.data_queue.append(DataHandler(data_dict))
         self.save_path_queue.append(save_path)
 
-    def save_data(self):
-        if len(self.data_queue) >= self.max_data_cnt:
+    def save_data(self, is_last=False):
+        if len(self.data_queue) >= self.max_data_cnt or is_last:
             for i in range(len(self.save_path_queue)):
                 self.data_queue[i].save(self.save_path_queue[i])
-            self.data_queue = []
-            self.save_path_queue = []
+            self.reset_data()
         else:
             return
+
+    def reset_data(self):
+        self.data_queue = []
+        self.save_path_queue = []
+
+
+class ForkedDataSaver:
+    def __init__(self, num_workers=None, max_queue_size=5000):
+        self.max_queue_size = max_queue_size
+        self.queue = mp.Queue(maxsize=max_queue_size)
+
+        self.num_workers = num_workers or max(1, mp.cpu_count() // 2)
+        self.workers = [
+            mp.Process(target=self._worker, args=(self.queue,))
+            for _ in range(self.num_workers)
+        ]
+        for w in self.workers:
+            w.start()
+        print(f"[ForkedDataSaver] Started. num_workers={self.num_workers}.")
+
+    def _worker(self, queue):
+        while True:
+            item = queue.get()
+            if item is None:
+                print("[ForkedDataSaver] item is None, existing loop!")
+                break
+            data_dict, file_path = item
+            try:
+                handler = DataHandler(data_dict)
+                handler.save(file_path)
+            except Exception as e:
+                print(f"[ForkedDataSaver Worker Error] Failed to save {file_path}: {e}")
+
+    def submit(self, data_dict, saving_dir, file_path=None):
+        if file_path is None:
+            timestamp = datetime.now().strftime("%m%d_%H%M%S_%f")
+            file_path = os.path.join(saving_dir, f"{timestamp}.npz")
+        try:
+            self.queue.put_nowait((data_dict, file_path))
+        except mp.queues.Full:
+            print(f"[Warning] Save queue full (>{self.max_queue_size}). Data dropped.")
+        return file_path
+
+    def save_remaining(self, check_interval=0.1, verbose=True):
+        while True:
+            remaining = self.queue.qsize()
+            if remaining == 0:
+                if verbose:
+                    print("[ForkedDataSaver] Queue fully processed. No remaining data.")
+                break
+            if verbose:
+                print(f"[ForkedDataSaver] Waiting... {remaining} item(s) remaining in queue.")
+            time.sleep(check_interval)
+
+    def close(self):
+        remaining = self.queue.qsize()
+        print(f"[ForkedDataSaver] Closing. Remaining: {remaining}")
+
+        for _ in self.workers:
+            self.queue.put(None)
+        for w in self.workers:
+            w.join()
+
+        print("[ForkedDataSaver] All saver workers exited.")

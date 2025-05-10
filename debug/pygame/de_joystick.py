@@ -179,4 +179,14 @@ if __name__ == "__main__":
     screen:              4,
     menu:               10,
     share:               9,
+    
+    PS5DualSense Ubuntu
+    Left Stick 0639:    A1, A1, A0, A0
+    Right Stick 0639:   A4, A5, A3, A3
+    A, B, X, Y:          1,  0,  2,  3
+    LB/L1, RB/R1:        4,  5,
+    LT/L2, RT/R2:        6,  7,
+    screen:              8,
+    menu:                9,
+    share:              10,
     """

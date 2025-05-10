@@ -29,7 +29,7 @@ class ServiceConnector:
             primary_rgb: np.ndarray,
             gripper_rgb: np.ndarray,
             task_description: Optional[str] = None,
-            joint_states: Optional[Sequence] = None,
+            joint_state: Optional[Sequence] = None,
             *args, **kwargs
     ) -> np.ndarray:
         """
@@ -37,15 +37,15 @@ class ServiceConnector:
         Output: actions predicted by the agent
         """
         primary_base64 = self.img_np_to_base64(primary_rgb)
-        # gripper_base64 = self.img_np_to_base64(gripper_rgb)
+        gripper_base64 = self.img_np_to_base64(gripper_rgb)
 
         response = self.http_session.post(
             f"{self.base_url}/step",
             json={
                 "primary_rgb": primary_base64,
-                "gripper_rgb": "none",  # to save network bandwidth
+                "gripper_rgb": gripper_base64,  # to save network bandwidth
                 "instruction": task_description,
-                "joint_states": joint_states,
+                "joint_state": joint_state,
             }
         )
         response.raise_for_status()
