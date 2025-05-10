@@ -1,4 +1,5 @@
 import warnings
+from typing import List
 import numpy as np
 import pickle
 from PIL import Image
@@ -10,7 +11,7 @@ import time
 
 
 class DataHandler:
-    def __init__(self, data_dict: dict):
+    def __init__(self, data_dict: dict, verbose=False):
         """初始化 DataHandler
         Example:
         data_dict = {
@@ -27,7 +28,7 @@ class DataHandler:
         """
         self.data_dict = data_dict
 
-        if not self._validate_data(data_dict):
+        if not self._validate_data(data_dict, verbose=verbose):
             raise ValueError("数据字典格式无效！")
 
     def update(self, data_dict: dict):
@@ -57,7 +58,7 @@ class DataHandler:
         print(f"Data saved as: {file_path}")
 
     @classmethod
-    def load(cls, file_path: str):
+    def load(cls, file_path: str, load_keys: List[str]):
         """加载 .npz 文件并恢复数据"""
         try:
             if not os.path.exists(file_path):
@@ -68,6 +69,8 @@ class DataHandler:
 
             data_dict = {}
             for key in npzfile.files:
+                if key not in load_keys:
+                    continue  # skip some unused keys
                 # 读取并反序列化每个数据项
                 if key in ['primary_rgb', 'gripper_rgb',
                            'primary_depth', 'gripper_depth',
@@ -93,7 +96,7 @@ class DataHandler:
         else:
             raise KeyError(f"字典中没有 {key} 这一项！")
 
-    def _validate_data(self, data_dict):
+    def _validate_data(self, data_dict, verbose=False):
         """验证数据字典的格式和类型"""
         expected_keys = {
             "primary_rgb": np.ndarray,
@@ -105,12 +108,13 @@ class DataHandler:
             "rel_actions": np.ndarray,
             "robot_obs": np.ndarray,
         }
-        if isinstance(data_dict['language_text'], str):
+        if 'language_text' in data_dict.keys() and isinstance(data_dict['language_text'], str):
             data_dict['language_text'] = np.array(data_dict['language_text'])
 
         for key, expected_type in expected_keys.items():
             if key not in data_dict:
-                print(f"[Warning] 缺少关键项：{key}")
+                if verbose:
+                    print(f"[Warning] missing：{key}")
                 continue
             if not isinstance(data_dict[key], expected_type):
                 print(f"项 {key} 的类型不匹配，预期类型 {expected_type}，实际类型 {type(data_dict[key])}")

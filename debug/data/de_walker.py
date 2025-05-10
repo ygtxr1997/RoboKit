@@ -2,13 +2,15 @@ import os
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
-from robokit.data import DataHandler
-from robokit.debug_utils import print_batch
+from robokit.data.tcl_datasets import TCLDataset
+from robokit.data.data_handler import DataHandler
+from robokit.debug_utils.printer import print_batch
+from robokit.debug_utils.io import dataloader_speed_test
 
 
-class TCLDataset(Dataset):
+class DeTCLDataset(Dataset):
     def __init__(self, root):
-        super(TCLDataset, self).__init__()
+        super(DeTCLDataset, self).__init__()
         self.root = root
 
         self.tasks = os.listdir(self.root)
@@ -47,5 +49,12 @@ class TCLDataset(Dataset):
 
 
 if __name__ == "__main__":
-    dataset = TCLDataset("F:\datasets\collected_data")
-    dataset.__getitem__(0)
+    dataset = TCLDataset(
+        "/home/geyuan/local_soft/TCL/collected_data_0507",
+        load_keys=["rel_actions", "primary_rgb", "gripper_rgb", "robot_obs", "language_text"],
+        use_extracted=True,
+    )
+    sample = dataset.__getitem__(0)
+    print_batch('data', sample)
+
+    dataloader_speed_test(dataset, num_workers=24)
