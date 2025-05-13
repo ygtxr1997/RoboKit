@@ -58,7 +58,7 @@ class DataHandler:
         print(f"Data saved as: {file_path}")
 
     @classmethod
-    def load(cls, file_path: str, load_keys: List[str]):
+    def load(cls, file_path: str, load_keys: List[str], decode_image: bool = True):
         """加载 .npz 文件并恢复数据"""
         try:
             if not os.path.exists(file_path):
@@ -75,7 +75,7 @@ class DataHandler:
                 if key in ['primary_rgb', 'gripper_rgb',
                            'primary_depth', 'gripper_depth',
                            ]:
-                    data_dict[key] = np.array(cls._binary_to_image(npzfile[key]))
+                    data_dict[key] = np.array(cls._binary_to_image(npzfile[key], decode_image=decode_image))
                 else:
                     data_dict[key] = pickle.loads(npzfile[key])
 
@@ -120,9 +120,9 @@ class DataHandler:
                 print(f"项 {key} 的类型不匹配，预期类型 {expected_type}，实际类型 {type(data_dict[key])}")
                 return False
             if isinstance(data_dict[key], np.ndarray):
-                if data_dict[key].ndim == 3 and key in ["primary_rgb", "gripper_rgb"]:
+                if data_dict[key].ndim <= 3 and key in ["primary_rgb", "gripper_rgb"]:
                     pass  # 对应 rgb 数据
-                elif data_dict[key].ndim == 2 and key in ["primary_depth", "gripper_depth"]:
+                elif data_dict[key].ndim <= 2 and key in ["primary_depth", "gripper_depth"]:
                     pass  # 对应深度数据
                 elif data_dict[key].shape == (7,) and key in ["actions", "rel_actions"]:
                     pass  # 对应动作数据
@@ -144,12 +144,15 @@ class DataHandler:
         return binary_data
 
     @staticmethod
-    def _binary_to_image(binary_data):
+    def _binary_to_image(binary_data, decode_image: bool = True):
         """将二进制数据转换回 PIL 图像"""
         buffer = BytesIO(binary_data)  # 保持 buffer 在内存中
-        pil_image = Image.open(buffer)
-        pil_image.load()  # 强制加载图像数据
-        return pil_image
+        if decode_image:
+            pil_image = Image.open(buffer)
+            pil_image.load()  # 强制加载图像数据
+            return pil_image
+        else:
+            return np.array(binary_data)
 
 
 class MultiDataHandler:

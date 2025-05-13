@@ -1,17 +1,25 @@
 import os
 import json
-from typing import List
+from typing import List, Dict, Tuple
 import numpy as np
 from tqdm import tqdm
+import h5py
+from PIL import Image
+from io import BytesIO
 from torch.utils.data import DataLoader, Dataset
 
 from robokit.data.data_handler import DataHandler
 
 
 class TCLDataset(Dataset):
-    def __init__(self, root, use_extracted: bool = False, load_keys: List[str] = None):
+    def __init__(self, root,
+                 use_extracted: bool = False,
+                 load_keys: List[str] = None,
+                 needs_decode_image: bool = True
+                 ):
         super(TCLDataset, self).__init__()
         self.root = root
+        self.needs_decode_image = needs_decode_image
 
         self.tasks = self.get_tasks(root)
         self.task_lengths = []
@@ -62,7 +70,8 @@ class TCLDataset(Dataset):
         return npz_data
 
     def load_single_frame(self, npz_path: str):
-        data_handler = DataHandler.load(file_path=npz_path, load_keys=self.load_keys)
+        data_handler = DataHandler.load(file_path=npz_path, load_keys=self.load_keys,
+                                        decode_image=self.needs_decode_image)
         data = {
             k: data_handler.get(k) for k in self.load_keys
         }
@@ -191,6 +200,202 @@ class TCLDataset(Dataset):
             path = os.path.join(self.root, f"extracted/{key}.npy")
         self.extracted_data[key] = np.load(path)
         print(f"[TCLDataset] loaded key={key} shape={self.extracted_data[key].shape} from {path}")
+
+
+class TCLDatasetHDF5(TCLDataset):
+    def __init__(self, root: str, h5_path: str, keys_config: Dict[str, str] = None, use_h5: bool = True,
+                 use_extracted: bool = True, load_keys: List[str] = None, is_img_decoded_in_h5: bool = False):
+        """
+        初始化 TCLDatasetHDF5 数据集对象
+        :param root: `.npz` 数据集的根目录
+        :param h5_path: 输出的 HDF5 文件路径
+        :param keys_config: 键配置，指定每个字段的类型（如 'rgb', 'depth', 'string' 等）
+        """
+        super().__init__(root, use_extracted, load_keys, is_img_decoded_in_h5)
+        self.h5_path = h5_path
+        self.is_img_decoded_in_h5 = is_img_decoded_in_h5
+
+        keys_config = keys_config or {
+            "primary_rgb": "rgb",
+            "gripper_rgb": "rgb",
+            "primary_depth": "depth",
+            "gripper_depth": "depth",
+            "language_text": "string",
+            "actions": "float",
+            "rel_actions": "float",
+            "robot_obs": "float"
+        }
+        self.keys_config = keys_config  # 例如 {"primary_rgb": "rgb", "language_text": "string", ...}
+
+        # 如果 h5_path 存在，提前加载 HDF5 文件
+        self.use_h5 = use_h5
+        self.dsets = {}
+        if os.path.exists(self.h5_path) and use_h5:
+            print("[TCLDatasetHDF5] using h5 data:", self.h5_path)
+            self._load_hdf5_file()
+
+    @staticmethod
+    def _extract_image_bytes(raw):
+        """
+        提取图像字节流（如 BytesIO 或 ndarray）
+        :param raw: 输入的数据，可以是 BytesIO 对象或者 ndarray
+        :return: 二进制字节流
+        """
+        if isinstance(raw, np.ndarray):
+            raw = raw.item() if raw.shape == () else raw
+
+        if isinstance(raw, BytesIO):
+            return raw.getvalue()
+        elif isinstance(raw, bytes):
+            return raw
+        elif isinstance(raw, np.ndarray):
+            return raw.tobytes()
+        else:
+            raise ValueError(f"Unexpected raw type: {type(raw)}")
+
+    @staticmethod
+    def encode_fixed_string(s: str, max_len: int = 300, end_token: bytes = b'#') -> bytes:
+        """
+        将字符串编码为定长的 S300 字符串，填充空格并添加结束符号
+        :param s: 输入字符串
+        :param max_len: 最大长度
+        :param end_token: 结束符
+        :return: 定长编码的字节流
+        """
+        s = s.replace('\0', '')  # 清理 NULL 字符
+        s_trim = s[: max_len - 1]
+        return (s_trim + end_token.decode('utf-8')).ljust(max_len, ' ').encode('utf-8')
+
+    @staticmethod
+    def binary_to_image(binary_data, decode_image: bool = True):
+        """将二进制数据转换回 PIL 图像"""
+        buffer = BytesIO(binary_data)  # 保持 buffer 在内存中
+        if decode_image:
+            pil_image = Image.open(buffer)
+            pil_image.load()  # 强制加载图像数据
+            return pil_image
+        else:
+            return np.array(binary_data)
+
+    def convert_to_hdf5(self, batch_size: int = 16, num_workers: int = 0, pin_memory: bool = False,
+                        resize_wh: Tuple[int, int] = None):
+        """
+        使用 DataLoader 批量读取并将整个数据集写入 HDF5 文件。
+        :param batch_size: 每个批次的大小
+        :param num_workers: 使用的工作进程数量
+        :param pin_memory: 是否启用内存锁定
+        """
+        print(f"[TCLDatasetHDF5] Saving data to HDF5 at {self.h5_path}")
+        os.makedirs(os.path.dirname(self.h5_path), exist_ok=True)
+
+        # 1. 从第一个样本推断每个字段的 dtype 和 shape
+        first = self.load_single_frame(os.path.join(self.root, self.ep_fns[0]))
+        dtypes, shapes = {}, {}
+        for k in self.load_keys:
+            val = first[k]
+            kind = self.keys_config.get(k, 'float')
+
+            if kind == 'string':
+                dtypes[k] = 'S300'
+                shapes[k] = (self.total_length,)
+            elif kind in ('rgb', 'depth'):
+                if not self.is_img_decoded_in_h5:
+                    b = self._extract_image_bytes(val)
+                    dtypes[k] = h5py.vlen_dtype(np.uint8)
+                    shapes[k] = (self.total_length,)
+                else:
+                    resize_wh = resize_wh or Image.fromarray(val).size
+                    val = Image.fromarray(val).resize(size=resize_wh)
+                    arr = np.array(val)
+                    dtypes[k] = arr.dtype  # 注意此时是 uint8，不是 vlen
+                    shapes[k] = (self.total_length, *arr.shape)  # 例如 (N, 480, 848, 3)
+            else:
+                arr = np.asarray(val)
+                dtypes[k] = arr.dtype
+                shapes[k] = (self.total_length,) + arr.shape
+
+        # 2. 创建 HDF5 文件和数据集
+        hf = h5py.File(self.h5_path, 'w')
+        datasets = {
+            k: hf.create_dataset(k, shape=shapes[k], dtype=dtypes[k], compression='lzf')
+            for k in self.load_keys
+        }
+
+        # 3. 定义 DataLoader 和 collate_fn
+        def collate_fn(batch):
+            out = {}
+            for k in self.load_keys:
+                kind = self.keys_config.get(k, 'float')
+                items = [b[k] for b in batch]
+
+                if kind == 'string':
+                    out[k] = np.array([
+                        self.encode_fixed_string(str(x)) for x in items
+                    ], dtype='S300')
+                elif kind in ('rgb', 'depth'):
+                    if not self.is_img_decoded_in_h5:
+                        out[k] = np.array([
+                            np.frombuffer(self._extract_image_bytes(x), dtype=np.uint8)
+                            for x in items
+                        ], dtype=object)
+                    else:
+                        # 解码后的 RGB 应该是 (480, 848, 3)，堆叠为 (B, 480, 848, 3)
+                        out[k] = np.stack([np.array(Image.fromarray(x).resize(resize_wh)) for x in items], axis=0)
+                else:
+                    out[k] = np.stack(items, axis=0)
+            return out
+
+        loader = DataLoader(
+            self,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            collate_fn=collate_fn
+        )
+
+        # 4. 批量写入 HDF5
+        idx = 0
+        for batch in tqdm(loader, desc="Writing HDF5 batches"):
+            bsize = next(iter(batch.values())).shape[0]
+            for k, data in batch.items():
+                datasets[k][idx:idx + bsize] = data
+            idx += bsize
+
+        hf.close()
+        print(f"[TCLDatasetHDF5] Data successfully saved to {self.h5_path}")
+
+    def _load_hdf5_file(self):
+        """加载 HDF5 文件并将每个字段的 dataset 存储到 dsets 字典中"""
+        self.hf = h5py.File(self.h5_path, 'r')  # 这里打开文件并保留文件句柄
+        for key in self.keys_config:
+            self.dsets[key] = self.hf[key]
+
+    def __getitem__(self, index: int):
+        """根据索引从 HDF5 文件中读取数据"""
+        sample = {}
+
+        # 如果有 h5_path，且已经加载过数据，则从 HDF5 读取
+        if hasattr(self, 'h5_path') and self.h5_path and hasattr(self, 'dsets') and self.dsets:
+            # 使用加载的 HDF5 数据集 dsets
+            for key in self.load_keys:
+                kind = self.keys_config[key]
+                data = self.dsets[key][index]  # 从已加载的 HDF5 数据集读取数据
+
+                if kind == "string":
+                    sample[key] = data.decode('utf-8').strip()  # 还原为原始字符串，去掉填充的空格和结束符
+                elif kind in ('rgb', 'depth'):
+                    if not self.is_img_decoded_in_h5:
+                        sample[key] = np.array(self.binary_to_image(data))
+                    else:
+                        sample[key] = np.array(data)
+                else:
+                    sample[key] = data
+        else:
+            # 如果没有加载 HDF5 文件或没有指定 h5_path，则回退到从 .npz 读取数据
+            sample = super().__getitem__(index)
+
+        return sample
 
 
 if __name__ == "__main__":

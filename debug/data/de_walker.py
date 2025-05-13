@@ -48,13 +48,81 @@ class DeTCLDataset(Dataset):
         return self.total_length
 
 
+from PIL import Image
+from io import BytesIO
 if __name__ == "__main__":
-    dataset = TCLDataset(
-        "/home/geyuan/local_soft/TCL/collected_data_0507",
-        load_keys=["rel_actions", "primary_rgb", "gripper_rgb", "robot_obs", "language_text"],
-        use_extracted=True,
-    )
-    sample = dataset.__getitem__(0)
-    print_batch('data', sample)
+    from robokit.data.tcl_datasets import TCLDatasetHDF5
+    h5_path = "/home/geyuan/local_soft/TCL/hdf5/collected_data_0507.h5"
+    keys_config = {
+        "primary_rgb": "rgb",
+        "gripper_rgb": "rgb",
+        "primary_depth": "depth",
+        "gripper_depth": "depth",
+        "language_text": "string",
+        "actions": "float",
+        "rel_actions": "float",
+        "robot_obs": "float"
+    }
 
-    dataloader_speed_test(dataset, num_workers=24)
+    # dataset = TCLDataset(
+    #     "/home/geyuan/local_soft/TCL/memory/collected_data_0507",
+    #     load_keys=None,  #["rel_actions", "primary_rgb", "gripper_rgb", "robot_obs", "language_text"],
+    #     use_extracted=True,
+    # )
+    # sample = dataset.__getitem__(0)
+    # print_batch('data', sample)
+    #
+    # dataset = TCLDataset(root="/home/geyuan/local_soft/TCL/memory/collected_data_0507")
+
+    # converter = TCLDatasetHDF5(
+    #     "/home/geyuan/local_soft/TCL/collected_data_0507_light_random",
+    #     "/home/geyuan/local_soft/TCL/hdf5/collected_data_0507_light_random.h5",
+    #     use_h5=False,
+    # )
+    # converter.convert_to_hdf5(
+    #     num_workers=48,
+    #     pin_memory=True,
+    # )
+
+    import h5py
+
+    def _binary_to_image(binary_data, decode_image: bool = True):
+        """将二进制数据转换回 PIL 图像"""
+        buffer = BytesIO(binary_data)  # 保持 buffer 在内存中
+        if decode_image:
+            pil_image = Image.open(buffer)
+            pil_image.load()  # 强制加载图像数据
+            return pil_image
+        else:
+            return np.array(buffer)
+
+    import cv2
+    def map_depth_with_color(depth_image: np.ndarray) -> Image.Image:
+        depth_colored = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+        depth_colored = cv2.cvtColor(depth_colored, cv2.COLOR_BGRA2RGBA)
+        depth_colored_image = Image.fromarray(depth_colored)
+        return depth_colored_image
+
+    dsets = {}
+    with h5py.File("/home/geyuan/local_soft/TCL/hdf5/collected_data_0507_light_random.h5", 'r') as f:
+        print(list(f.keys()))  # 查看文件顶级内容
+        print(f['primary_rgb'].shape)  # 查看一个数据集的形状
+        for key in keys_config:
+            dsets[key] = f[key]
+        img = _binary_to_image(dsets['primary_rgb'][10])
+        print(img.size)
+        # img = map_depth_with_color(np.array(img))
+        img.save("tmp_h5.png", "PNG")
+
+    # h5_dataset = TCLDatasetHDF5(
+    #     "/home/geyuan/local_soft/TCL/memory/collected_data_0507",
+    #     "/home/geyuan/local_soft/TCL/hdf5/collected_data_0507.h5",
+    #     load_keys=["primary_rgb", "gripper_rgb", "language_text", "rel_actions", "robot_obs"],
+    #     use_h5=True,
+    #     is_img_decoded_in_h5=False,
+    # )
+    # sample = h5_dataset.__getitem__(0)
+    # print_batch('h5_data', sample)
+    #
+    # dataloader_speed_test(h5_dataset, num_workers=24)
+

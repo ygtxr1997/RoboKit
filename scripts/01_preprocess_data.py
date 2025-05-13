@@ -1,8 +1,16 @@
 import argparse
-from robokit.data.tcl_datasets import TCLDataset
+from robokit.debug_utils.printer import print_batch
+from robokit.data.tcl_datasets import TCLDataset, TCLDatasetHDF5
 
 
 def main(opts):
+    if opts.as_hdf5 != "":
+        convert_to_hdf5(opts)
+    else:
+        preprocess(opts)
+
+
+def preprocess(opts):
     data_root = opts.root  # e.g. "/home/geyuan/local_soft/TCL/collected_data_0507_light_random"
 
     # 1. Load data
@@ -30,13 +38,43 @@ def main(opts):
     print("Preprocessing finished.")
 
 
+def convert_to_hdf5(opts):
+    data_root = opts.root
+
+    # 5. Convert to HDF5
+    converter = TCLDatasetHDF5(
+        data_root,
+        opts.as_hdf5,
+        use_h5=False,
+    )
+    converter.convert_to_hdf5(
+        num_workers=48,
+        pin_memory=True,
+    )
+
+    h5_dataset = TCLDatasetHDF5(
+        data_root,
+        opts.as_hdf5,
+        load_keys=["primary_rgb", "gripper_rgb", "language_text", "rel_actions", "robot_obs"],
+        use_h5=True,
+        is_img_decoded_in_h5=False,
+    )
+    sample = h5_dataset.__getitem__(0)
+    print_batch('h5_data', sample)
+
+    print("HDF5 conversion finished.")
+
+
 if __name__ == "__main__":
     """
     Example usage:
-    python scripts/01_preprocess_data.py -R "/home/geyuan/local_soft/TCL/collected_data_0507_light_random"
+    python scripts/01_preprocess_data.py  \
+        -R "/home/geyuan/local_soft/TCL/collected_data_0507"  \
+        --as_hdf5 "/home/geyuan/local_soft/TCL/hdf5/collected_data_0507.h5"
     """
     args = argparse.ArgumentParser("Test data format")
     args.add_argument("-R", "--root", required=True, type=str, help="Root folder path")
     args.add_argument("-i", "--check_index", default=23, type=int, help="Index for checking")
+    args.add_argument("--as_hdf5", default="", type=str, help="(Optional) saving HDF5 file path")
     args = args.parse_args()
     main(args)
