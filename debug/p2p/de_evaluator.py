@@ -14,13 +14,20 @@ robot_client = RobotClient(client)
 
 # debug: 6060
 # zhihao: 6260
-gpu_connector = ServiceConnector(base_url="http://localhost:6060")
+gpu_connector = ServiceConnector(base_url="http://localhost:5880")
 evaluator = RealWorldEvaluator(
     gpu_service_connector=gpu_connector,
     robot=robot_client,
     run_loops=5000,
-    img_hw=(480, 848),
-    enable_auto_ae_wb=False,
+    img_hw=(480, 848),  # (480, 848)
+    enable_auto_ae_wb=True,
     fps=30,
 )  # TODO: better AE-WB setting
-evaluator.run()
+try:
+    evaluator.run()
+except Exception as e:
+    print(e)
+except KeyboardInterrupt:
+    print("用户按下 Ctrl+C，程序中断。")
+finally:
+    evaluator.stop()

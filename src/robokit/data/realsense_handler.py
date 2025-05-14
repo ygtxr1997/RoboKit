@@ -12,16 +12,18 @@ import pyrealsense2 as rs
 
 
 class RealsenseHandler(object):
-    def __init__(self, img_width: int = 848, img_height: int = 480, frame_rate: int = 60):
+    def __init__(self, img_width: int = 848, img_height: int = 480, frame_rate: int = 60, use_depth: bool = True):
         # 确定图像的输入分辨率与帧率
         self.img_width = img_width
         self.img_height = img_height
         self.frame_rate = frame_rate
 
         # 注册数据流，并对其图像
+        self.use_depth = use_depth
         self.align = rs.align(rs.stream.color)
         rs_config = rs.config()
-        rs_config.enable_stream(rs.stream.depth, img_width, img_height, rs.format.z16, frame_rate)
+        if self.use_depth:
+            rs_config.enable_stream(rs.stream.depth, img_width, img_height, rs.format.z16, frame_rate)
         rs_config.enable_stream(rs.stream.color, img_width, img_height, rs.format.bgr8, frame_rate)
 
         # check相机是不是进来了
@@ -199,16 +201,18 @@ class RealsenseHandler(object):
         aligned_frames2 = self.align.process(frames2)
 
         # 将对其的RGB—D图取出来
-        depth_frame1 = frames1.get_depth_frame()
+        depth_image1, depth_image2 = None, None
+        if self.use_depth:
+            depth_frame1 = frames1.get_depth_frame()
+            depth_frame2 = frames2.get_depth_frame()
+            depth_image1 = copy.deepcopy(np.asanyarray((depth_frame1.get_data())))  # in [0,65535]
+            depth_image2 = copy.deepcopy(np.asanyarray((depth_frame2.get_data())))  # in [0,65535]
         color_frame1 = frames1.get_color_frame()
-        depth_frame2 = frames2.get_depth_frame()
         color_frame2 = frames2.get_color_frame()
 
         # 将图像转换为numpy数组
         color_image1 = copy.deepcopy(np.asanyarray((color_frame1.get_data())))  # BGR
-        depth_image1 = copy.deepcopy(np.asanyarray((depth_frame1.get_data())))  # in [0,65535]
         color_image2 = copy.deepcopy(np.asanyarray((color_frame2.get_data())))  # BGR
-        depth_image2 = copy.deepcopy(np.asanyarray((depth_frame2.get_data())))  # in [0,65535]
 
         def map_depth_with_color(depth_image: np.ndarray) -> Image.Image:
             depth_colored = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
@@ -216,25 +220,27 @@ class RealsenseHandler(object):
             depth_colored_image = Image.fromarray(depth_colored)
             return depth_colored_image
 
-        depth_colored_image1 = map_depth_with_color(depth_image1)
-        depth_colored_image2 = map_depth_with_color(depth_image2)
+        if self.use_depth:
+            depth_colored_image1 = map_depth_with_color(depth_image1)
+            depth_colored_image2 = map_depth_with_color(depth_image2)
 
         color_image1 = color_image1[:, :, ::-1]  # BGR to RGB
         color_image2 = color_image2[:, :, ::-1]
 
         if save_prefix is not None:
             image_filename = f"{save_prefix}_1_color.jpg"
-            depth_image_filename = f"{save_prefix}_1_depth.png"
             Image.fromarray(color_image1).save(image_filename)
-            Image.fromarray(depth_image1).save(depth_image_filename)
-
             image_filename = f"{save_prefix}_2_color.jpg"
-            depth_image_filename = f"{save_prefix}_2_depth.png"
             Image.fromarray(color_image2).save(image_filename)
-            Image.fromarray(depth_image2).save(depth_image_filename)
 
-            depth_colored_image1.save(f"{save_prefix}_1_depth_color.png")
-            depth_colored_image2.save(f"{save_prefix}_2_depth_color.png")
+
+            if self.use_depth:
+                depth_image_filename = f"{save_prefix}_1_depth.png"
+                Image.fromarray(depth_image1).save(depth_image_filename)
+                depth_image_filename = f"{save_prefix}_2_depth.png"
+                Image.fromarray(depth_image2).save(depth_image_filename)
+                depth_colored_image1.save(f"{save_prefix}_1_depth_color.png")
+                depth_colored_image2.save(f"{save_prefix}_2_depth_color.png")
 
             print(f"[RealsenseHandler] Images saved as: {save_prefix}_xxx.jpg/png")
 
@@ -247,5 +253,14 @@ class RealsenseHandler(object):
 
     def stop(self):
         for pipeline in self.pipelines:
-            pipeline.stop()
-        print("Stopping all pipelines")
+            try:
+                pipeline.stop()
+            except Exception as e:
+                print(f"[RealsenseHandler] Failed to stop pipeline: {e}")
+
+            # 清理资源引用（非必须，但推荐）
+        self.pipeline_profiles = []
+        self.pipelines = []
+        self.connect_devices = []
+
+        print("[RealsenseHandler] All pipelines stopped and resources released.")

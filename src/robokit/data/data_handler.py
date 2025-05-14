@@ -8,6 +8,8 @@ import os
 import multiprocessing as mp
 from datetime import datetime
 import time
+import cv2
+from collections import deque
 
 
 class DataHandler:
@@ -236,3 +238,50 @@ class ForkedDataSaver:
             w.join()
 
         print("[ForkedDataSaver] All saver workers exited.")
+
+
+class ImageAsVideoSaver:
+    def __init__(self, buffer_size=10, frame_rate=30, width=640, height=480):
+        # 初始化类，设置最大缓存大小、帧率、视频分辨率等
+        self.buffer_size = buffer_size
+        self.frame_rate = frame_rate
+        self.width = width
+        self.height = height
+
+        # 使用队列来存储图像
+        self.image_queue = deque(maxlen=self.buffer_size)
+
+    def add_image(self, image: np.ndarray):
+        """
+        向队列中添加图像
+        :param image: 要添加到视频队列中的图像，应该是 numpy 数组形式
+        """
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        # 确保图像大小为 (height, width, channels)，并且图像是 BGR 格式
+        if image.shape[0] != self.height or image.shape[1] != self.width:
+            image = cv2.resize(image, (self.width, self.height))
+
+        self.image_queue.append(image)
+
+    def save_to_video(self, path: str):
+        """
+        将队列中的图像保存为视频
+        :param path: 保存视频的路径（例如: 'output.avi'）
+        """
+        if len(self.image_queue) == 0:
+            print("No images in the queue to save.")
+            return
+
+        # 获取视频的编码器
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
+        # 创建 VideoWriter 对象
+        out = cv2.VideoWriter(path, fourcc, self.frame_rate, (self.width, self.height))
+
+        # 写入图像队列中的每一帧
+        for img in self.image_queue:
+            out.write(img)
+
+        # 释放 VideoWriter
+        out.release()
+        print(f"Video saved at {path}")

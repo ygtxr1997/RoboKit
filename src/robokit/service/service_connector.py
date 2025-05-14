@@ -16,13 +16,24 @@ class ServiceConnector:
         self.base_url = base_url
         self.http_session = requests.Session()
 
+        self.send_per_frames = 1
+
+        # Dynamic
+        self.send_cnt = 0
+
         print(f"[ServiceConnector] session created: {base_url}")
 
-    def reset(self, task_description: str) -> None:
+    def reset(self, task_description: str) -> int:
         pass
 
         resp = self.http_session.get(f"{self.base_url}/reset")
         resp.raise_for_status()
+
+        resp = resp.json()
+        max_cache_action = resp["max_cache_action"]
+        self.send_per_frames = max(self.send_per_frames, 1)
+        self.send_cnt = 0
+        return max_cache_action
 
     def step(
             self,
@@ -39,19 +50,32 @@ class ServiceConnector:
         primary_base64 = self.img_np_to_base64(primary_rgb)
         gripper_base64 = self.img_np_to_base64(gripper_rgb)
 
-        response = self.http_session.post(
-            f"{self.base_url}/step",
-            json={
-                "primary_rgb": primary_base64,
-                "gripper_rgb": gripper_base64,  # to save network bandwidth
-                "instruction": task_description,
-                "joint_state": joint_state,
-            }
-        )
+        if self.send_cnt % self.send_per_frames == 0:
+            response = self.http_session.post(
+                f"{self.base_url}/step",
+                json={
+                    "primary_rgb": primary_base64,
+                    "gripper_rgb": gripper_base64,
+                    "instruction": task_description,
+                    "joint_state": joint_state,
+                }
+            )
+        else:
+            response = self.http_session.post(
+                f"{self.base_url}/step",
+                json={
+                    "primary_rgb": [""],
+                    "gripper_rgb": [""],  # to save network bandwidth
+                    "instruction": task_description,
+                    "joint_state": joint_state,
+                }
+            )
         response.raise_for_status()
 
         response = response.json()
         raw_actions = np.array(response["action"])[None]  # (1,6) or (1,7)
+
+        self.send_cnt += 1
         return raw_actions
 
     @staticmethod

@@ -13,6 +13,10 @@ client.run()
 # Sanity check to see if we are connected
 print('Verifying the ROS target is connected?', client.is_connected)
 
+env_source_params = {
+    "enable_auto_ae_wb": True,
+}
+
 env_light_params = {
     "enable_auto_ae_wb": False,
     "ae_wb_params": [{
@@ -24,10 +28,10 @@ env_light_params = {
 rc = RobotClient(client)
 controller = PS5DualSenseIMUController(
     robot=rc,
-    saving_root="/home/geyuan/local_soft/TCL/collected_data_0507_light/",
+    saving_root="/home/geyuan/local_soft/TCL/collected_data_0513_table/",
     task_instruction="pick up the banana",
     saving_workers=6,
-    **env_light_params
+    **env_source_params
 )
 
 controller.start()
