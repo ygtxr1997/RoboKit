@@ -25,13 +25,18 @@ env_light_params = {
     }],
 }
 
+# Params for data collector
+saving_root = "/home/geyuan/local_soft/TCL/0627_pot_source/"
+task_instruction = "put the egg into the pot, then move the pot onto the stove"
+env_params = env_source_params
+
 rc = RobotClient(client)
 controller = PS5DualSenseIMUController(
     robot=rc,
-    saving_root="/home/geyuan/local_soft/TCL/collected_data_0516_tmp/",
-    task_instruction="pick up the shovel and put it into the cup",
+    saving_root=saving_root,
+    task_instruction=task_instruction,
     saving_workers=6,
-    **env_source_params
+    **env_params
 )
 
 controller.start()

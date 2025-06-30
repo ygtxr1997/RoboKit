@@ -577,7 +577,7 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         PS5DualSenseController.__init__(self, robot, joystick_idx=joystick_idx,
                                      saving_root=saving_root, **kwargs)
         self.imu_controller = RawIMUHandler()
-        self.angular_scale = .3
+        self.angular_scale = .4
 
     def update_xyz(self):
         x = -self.get_joy_axis(0)
@@ -604,6 +604,13 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         scaled_xyz['y'] = -self.angular_xyz['x']
         scaled_xyz['z'] = scaled_xyz['z'] if abs(scaled_xyz['z']) > abs(self.z_39) else self.z_39
         scaled_xyz = {k: v * self.angular_scale for k, v in scaled_xyz.items()}
+
+        # for k, v in linear_scaled_xyz.items():
+        #     if np.random.uniform() > 0.9:
+        #         linear_scaled_xyz[k] = v + float(np.random.randn(1)) * np.random.uniform(0.01, 0.03)
+        # for k, v in scaled_xyz.items():
+        #     if np.random.uniform() > 0.9:
+        #         scaled_xyz[k] = v + float(np.random.randn(1)) * np.random.uniform(0.01, 0.04)
 
         self.robot.lin_ang_jog_pub(linear_scaled_xyz, scaled_xyz)
 

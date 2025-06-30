@@ -37,9 +37,8 @@ def main(opts):
 if __name__ == "__main__":
     """
     Example usage:
-    python scripts/01_preprocess_data.py  \
-        -R "/home/geyuan/local_soft/TCL/collected_data_0507"  \
-        --as_hdf5 "/home/geyuan/local_soft/TCL/hdf5/collected_data_0507.h5"
+    python scripts/03_run_real_evaluator.py  \
+        -p 6060
     """
     args = argparse.ArgumentParser("03 Run Real Evaluator")
     # debug: 6060

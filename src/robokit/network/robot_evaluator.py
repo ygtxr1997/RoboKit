@@ -1,6 +1,7 @@
 import time
 import os
 from typing import List
+from tqdm import tqdm
 import numpy as np
 from PIL import Image
 
@@ -82,10 +83,15 @@ class RealWorldEvaluator:
     def run(self) -> float:
         last_game_time = time.time()  # for FPS limitation
 
-        cur_task_text = "pick up the banana"
+        # cur_task_text = "pick up the banana"
+        # cur_task_text = "pick up the shovel and put it into the cup"
+        cur_task_text = "put the egg into the pot, then move the pot onto the stove"
         buffer_size = self.buffer_size
         self.connector.reset(cur_task_text)
         self.reset()
+
+        for _ in tqdm(range(200), desc="Skipping frames:"):
+            self.capture_env_observation()
 
         while True:
             self.time_tick()
@@ -169,8 +175,15 @@ class RealWorldEvaluator:
                     task_description=cur_task_text,
                     joint_state=cur_joint_state,  # [[0.] * 6] * T
                 )
-                assert action.shape[1] == 7
+                assert action.shape[1] == 7, f"action.shape={action.shape} is not (:,7)"
                 print(self.step_cnt, action, cur_joint_state)
+
+                # safe_min_z = 0.3
+                # print(cur_joint_state[-1][2], safe_min_z)
+                # if cur_joint_state[-1][2] <= safe_min_z:
+                #     for h in range(action.shape[0]):
+                #         if action[h, 2] < 0.:
+                #             action[h, 2] = 0.7 * action[h, 2]
 
                 # 4. Conduct action in real-world environment
                 self.step(action[0, :])

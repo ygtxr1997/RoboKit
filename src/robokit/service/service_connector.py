@@ -20,6 +20,7 @@ class ServiceConnector:
 
         # Dynamic
         self.send_cnt = 0
+        self.cache_actions = None
 
         print(f"[ServiceConnector] session created: {base_url}")
 
@@ -31,7 +32,7 @@ class ServiceConnector:
 
         resp = resp.json()
         max_cache_action = resp["max_cache_action"]
-        self.send_per_frames = max(self.send_per_frames, 1)
+        self.send_per_frames = max(max_cache_action, 1)
         self.send_cnt = 0
         return max_cache_action
 
@@ -51,32 +52,45 @@ class ServiceConnector:
         gripper_base64 = self.img_np_to_base64(gripper_rgb)
 
         if self.send_cnt % self.send_per_frames == 0:
+            print(f"[ServiceConnector] sending frames, i={self.send_cnt}, per={self.send_per_frames}, "
+                  f"i%per={self.send_cnt % self.send_per_frames}")
+            sending_dict = {
+                "primary_rgb": primary_base64,
+                "gripper_rgb": gripper_base64,
+                "instruction": task_description,
+                "joint_state": joint_state,
+            }
             response = self.http_session.post(
                 f"{self.base_url}/step",
-                json={
-                    "primary_rgb": primary_base64,
-                    "gripper_rgb": gripper_base64,
-                    "instruction": task_description,
-                    "joint_state": joint_state,
-                }
+                json=sending_dict
             )
-        else:
-            response = self.http_session.post(
-                f"{self.base_url}/step",
-                json={
-                    "primary_rgb": [""],
-                    "gripper_rgb": [""],  # to save network bandwidth
-                    "instruction": task_description,
-                    "joint_state": joint_state,
-                }
-            )
-        response.raise_for_status()
+            response.raise_for_status()
+            response = response.json()
+            if isinstance(response["action"], float):
+                raw_actions = np.array(response["action"])[None]  # (1,7)
+            else:
+                assert isinstance(response["action"], Sequence), f"Not supported action: {type(response['action'])}"
+                raw_actions = np.array(response["action"])  # (H,7)
 
-        response = response.json()
-        raw_actions = np.array(response["action"])[None]  # (1,6) or (1,7)
+            # assert raw_actions.shape[0] == self.send_per_frames
+            self.cache_actions = raw_actions
+        else:  # don't send anything, to save network bandwidth
+            # response = self.http_session.post(
+            #     f"{self.base_url}/step",
+            #     json={
+            #         "primary_rgb": [""],
+            #         "gripper_rgb": [""],
+            #         "instruction": task_description,
+            #         "joint_state": joint_state,
+            #     }
+            # )
+            pass
+
+        ret_actions = self.cache_actions[self.send_cnt % self.send_per_frames]
+        ret_actions = np.array(ret_actions)[None]  # [7,] -> (1,7)
 
         self.send_cnt += 1
-        return raw_actions
+        return ret_actions
 
     @staticmethod
     def img_np_to_base64(image: np.ndarray) -> list[str]:

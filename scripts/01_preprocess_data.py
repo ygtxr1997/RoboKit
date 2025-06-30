@@ -73,6 +73,11 @@ def convert_to_hdf5(opts):
 if __name__ == "__main__":
     """
     Example usage:
+    Op1. Extract keys and statistics
+    python scripts/01_preprocess_data.py  \
+        -R "/home/geyuan/local_soft/TCL/0627_pot_source"
+    
+    Op2. Convert to HDF5
     python scripts/01_preprocess_data.py  \
         -R "/home/geyuan/local_soft/TCL/collected_data_0513_table"  \
         --as_hdf5 "/home/geyuan/local_soft/TCL/hdf5/collected_data_0507.h5"
