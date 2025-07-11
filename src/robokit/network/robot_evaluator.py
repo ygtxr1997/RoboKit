@@ -22,6 +22,7 @@ class RealWorldEvaluator:
                  fps: int = 5,
                  enable_auto_ae_wb: bool = True,
                  buffer_size: int = 1,
+                 speed_scale: float = 0.75,
                  # Save as video
                  image_save_speedup: float = 2.0,
                  image_save_fn: str = "tmp_saved_video.mp4",
@@ -42,6 +43,8 @@ class RealWorldEvaluator:
         self.camera.set_ae_wb_auto(enable_auto_ae_wb)
         if not enable_auto_ae_wb:
             self.camera.set_ae_wb(exposure=50)
+
+        self.speed_scale = speed_scale
 
         # Dynamic variables
         self.step_cnt = 0
@@ -234,31 +237,51 @@ class RealWorldEvaluator:
 
     def step(self, action: np.ndarray) -> None:
         """ Send action to Robotic Arm """
+        for i in range(3):
+            if abs(action[i]) > 0.1:
+                print("[Warning] bad action!!!", action[i])
+                action[i] = max(min(float(action[i]), 1), -1.)
+        action[0] *= self.speed_scale
+        action[1] *= self.speed_scale
+        action[2] *= self.speed_scale
+        action[3] = min(float(action[3]), 1.)
+        action[4] = min(float(action[4]), 1.)
+        action[5] = min(float(action[5]), 1.)
+        action[3] = max(float(action[3]), -1.)
+        action[4] = max(float(action[4]), -1.)
+        action[5] = max(float(action[5]), -1.)
+
         linear_xyz = {'x': action[0], 'y': action[1], 'z': action[2]}
         angular_xyz = {'x': action[3], 'y': action[4], 'z': action[5]}
+
         self.g = float(action[6])
-        if abs(action[3]) + abs(action[4]) + abs(action[5]) > abs(action[0]) + abs(action[1]) + abs(action[2]):
-            self.robot.ang_jog_pub(angular_xyz)
-            print("angular")
-        else:
-            self.robot.linear_jog_pub(linear_xyz)
-            print("linear")
+        # if abs(action[3]) + abs(action[4]) + abs(action[5]) > abs(action[0]) + abs(action[1]) + abs(action[2]):
+        #     self.robot.ang_jog_pub(angular_xyz)
+        #     print("angular")
+        # else:
+        #     self.robot.linear_jog_pub(linear_xyz)
+        #     print("linear")
+        self.robot.lin_ang_jog_pub(
+            linear_xyz,
+            angular_xyz,
+        )
 
     def on_gripper_move(self, g: float = None) -> None:
         self.g = g if g is not None else self.g
         self.robot.gripper_set_pub(self.g)
 
     def reset(self):
-        # return
+        return
         # Sanity check for gripper
-        self.robot.gripper_set_pub(1)
-        time.sleep(0.5)
-        self.robot.gripper_set_pub(0)
-        time.sleep(0.5)
+        # self.robot.gripper_set_pub(1)
+        # time.sleep(0.5)
+        # self.robot.gripper_set_pub(0)
+        # time.sleep(0.5)
 
         # Go back home
-        self.robot.joint_back_home()
+        # self.robot.joint_back_home()
 
     def stop(self):
         self.image_saver.save_to_video(self.image_save_fn)
         self.camera.stop()
+        self.robot.stop()

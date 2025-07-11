@@ -21,13 +21,22 @@ env_light_params = {
     "enable_auto_ae_wb": False,
     "ae_wb_params": [{
         "camera_idx": -1,
-        "exposure": 50,
+        "exposure": 30,
     }],
 }
 
-# Params for data collector
-saving_root = "/home/geyuan/local_soft/TCL/0627_pot_source/"
-task_instruction = "put the egg into the pot, then move the pot onto the stove"
+### Params for data collector ###
+''' Pot '''
+# saving_root = "/home/geyuan/local_soft/TCL/0627_pot_source/"
+# saving_root = "/home/geyuan/local_soft/TCL/0627_pot_object/"
+# task_instruction = "put the egg into the pot, then move the pot onto the stove"
+''' Pepper '''
+# saving_root = "/home/geyuan/local_soft/TCL/0704_pepper_source/"
+# task_instruction = "orient the cup upright on its base and insert the chili pepper vertically into it."
+''' Coffee '''
+saving_root = "/home/geyuan/local_soft/TCL/0709_coffee_source/"
+task_instruction = "use a spoon to scoop one spoonful of coffee beans from the source cup, then pour the beans into the target cup."
+
 env_params = env_source_params
 
 rc = RobotClient(client)
@@ -39,6 +48,13 @@ controller = PS5DualSenseIMUController(
     **env_params
 )
 
-controller.start()
+try:
+    controller.start()
+except Exception as e:
+    print(e)
+except KeyboardInterrupt:
+    print("用户按下 Ctrl+C，程序中断。")
+finally:
+    controller.stop()
 
 print("OK!")

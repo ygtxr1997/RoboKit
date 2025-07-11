@@ -48,9 +48,9 @@ class BaseController:
         self.g = 0.  # 0:open, 1:close
 
         # Open gripper service
-        self.robot.arm_power_on()
-        self.robot.robot_arm_enable()
-        self.robot.robot_gripper_enable()
+        # self.robot.arm_power_on()
+        # self.robot.robot_arm_enable()
+        # self.robot.robot_gripper_enable()
 
         # Sanity check for gripper
         self.robot.gripper_set_pub(1)
@@ -79,6 +79,7 @@ class BaseController:
         self.saving_root = saving_root
         self.saving_dir: str = None
         self.saving_frame_idx: int = 0
+        self.saving_episode_idx: int = 0
         self.task_instruction = task_instruction
 
     def get_datetime_str(self):
@@ -282,6 +283,10 @@ class BaseController:
         text = font.render(f"{label}: {value:.2f}", True, BLUE)
         screen.blit(text, (pos_x + bar_width + 20, pos_y + 5))
 
+    def stop(self):
+        self.camera.stop()
+        self.robot.stop()
+
     ''' Read information from Joystick '''
     @abstractmethod
     def update_state(self) -> None: pass
@@ -362,9 +367,11 @@ class BaseController:
         print("[tele_control] Episode Ended")
         self.on_rumble()
         time.sleep(0.1)
-        print("[tele_control] Waiting for saving last data in queue")
+        print(f"[tele_control] Waiting for saving last data in queue, cur_idx={self.saving_episode_idx}")
         self.data_manager.save_remaining()
         # self.on_back_home()
+
+        self.saving_episode_idx += 1
 
 
 class SwitchProController(BaseController):

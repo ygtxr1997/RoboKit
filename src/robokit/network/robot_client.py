@@ -30,7 +30,7 @@ class RobotClient:
     SAFETY_CIRCUIT_OPEN = 0
     SAFETY_CIRCUIT_CLOSED = 1
 
-    def __init__(self, ros):
+    def __init__(self, ros: roslibpy.Ros):
         self._ros = ros
 
         # SUBSCRIBING TO GRIPPER STATUS
@@ -95,6 +95,25 @@ class RobotClient:
                           'circuit': False}
 
         #### Services ####
+        self.switch_service = roslibpy.Service(
+            self._ros, '/robot/switch_controller', 'inovo_driver/SwitchControllerGroup')
+        self.action_tcp_client = roslibpy.actionlib.ActionClient(
+            self._ros, '/default_move_group/move',
+            'commander_msgs/MotionAction')
+        self.action_joint_client = roslibpy.actionlib.ActionClient(
+            self._ros, '/robot/joint_trajectory_controller/follow_joint_trajectory',
+            'control_msgs/FollowJointTrajectoryAction')
+
+        #### Linear and angular jog ####
+        self.jog_publisher = roslibpy.Topic(
+            self._ros, '/default_move_group/cartesian_jog',
+            'commander_msgs/CartesianJogDemand')
+
+        #### Gripper ####
+        self.gripper_publisher = roslibpy.Topic(
+            self._ros, "/devices/robotiqd/grip/goal",
+            "gripper_msgs/GripperBasicCommandActionGoal"
+        )
 
         ## Arm and PSU power and activation ##
         self.safe_stop_reset_service = roslibpy.Service(self._ros, '/psu/safe_stop/reset', 'std_srvs/Trigger')
@@ -298,28 +317,19 @@ class RobotClient:
         client = self._ros
         self.message_linear_jog = message
         self.message_angular_jog = self.message_zero_jog  # set angular as zero
-        publisher = roslibpy.Topic(
-            client, '/default_move_group/cartesian_jog',
-            'commander_msgs/CartesianJogDemand')
-        publisher.publish(roslibpy.Message({"twist": {"linear": message}}))
+        self.jog_publisher.publish(roslibpy.Message({"twist": {"linear": message}}))
 
     def ang_jog_pub(self, message: dict):
         client = self._ros
         self.message_linear_jog = self.message_zero_jog  # set linear as zero
         self.message_angular_jog = message
-        publisher = roslibpy.Topic(
-            client, '/default_move_group/cartesian_jog',
-            'commander_msgs/CartesianJogDemand')
-        publisher.publish(roslibpy.Message({"twist": {"angular": message}}))
+        self.jog_publisher.publish(roslibpy.Message({"twist": {"angular": message}}))
 
     def lin_ang_jog_pub(self, linear_message: dict, angular_message: dict):
         client = self._ros
         self.message_linear_jog = linear_message
         self.message_angular_jog = angular_message
-        publisher = roslibpy.Topic(
-            client, '/default_move_group/cartesian_jog',
-            'commander_msgs/CartesianJogDemand')
-        publisher.publish(roslibpy.Message({"twist": {
+        self.jog_publisher.publish(roslibpy.Message({"twist": {
             "linear": linear_message,
             "angular": angular_message
         }}))
@@ -327,12 +337,7 @@ class RobotClient:
     #### GRIPPER CONTROL ####
     def _send_gripper_action(self, action: int):
         # Send, 0:GRIP, 1:RELEASE, 2:TOGGLE
-        client = self._ros
-        publisher = roslibpy.Topic(
-            client, "/devices/robotiqd/grip/goal",
-            "gripper_msgs/GripperBasicCommandActionGoal"
-        )
-        publisher.publish(roslibpy.Message({
+        self.gripper_publisher.publish(roslibpy.Message({
             "goal": {
                 "action": action  # 0:GRIP, 1:RELEASE, 2:TOGGLE
             }
@@ -420,15 +425,12 @@ class RobotClient:
         }
         trajectory_goals = [trajectory_goal_settings]
 
-        service = roslibpy.Service(self._ros, '/robot/switch_controller', 'inovo_driver/SwitchControllerGroup')
+        # service = roslibpy.Service(self._ros, '/robot/switch_controller', 'inovo_driver/SwitchControllerGroup')
         request = roslibpy.ServiceRequest({'name': 'trajectory'})
-        result = service.call(request)
+        result = self.switch_service.call(request)
         # print('Service response: {}'.format(result))
 
         # Setting up the client for the trajectory action
-        action_client = roslibpy.actionlib.ActionClient(
-            self._ros, '/robot/joint_trajectory_controller/follow_joint_trajectory',
-            'control_msgs/FollowJointTrajectoryAction')
 
         message_ = {
             'trajectory': {  # Compiling the message of different dictionaries and arrays to be sent to the server
@@ -438,14 +440,13 @@ class RobotClient:
 
         # print(message_)
 
-        goal = roslibpy.actionlib.Goal(action_client, roslibpy.Message(message_))
+        goal = roslibpy.actionlib.Goal(self.action_joint_client, roslibpy.Message(message_))
 
         goal.on('[joint_goal_send] feedback:', lambda f: print(f))
         goal.send()
 
         print("[DEBUG] waiting for joint_goal...")
         result = goal.wait(timeout)
-        action_client.dispose()
         print("[DEBUG] joint_goal finished!...")
 
     def tcp_goal_send(self, tcp_pos: dict, tcp_ori: dict,
@@ -466,19 +467,15 @@ class RobotClient:
         }
         goal_info = [motion_goal_settings]
 
-        service = roslibpy.Service(
-            self._ros, '/robot/switch_controller', 'inovo_driver/SwitchControllerGroup')
+        # service = roslibpy.Service(
+        #     self._ros, '/robot/switch_controller', 'inovo_driver/SwitchControllerGroup')
         request = roslibpy.ServiceRequest({'name': 'trajectory'})
-        result = service.call(request)
-
-        action_client = roslibpy.actionlib.ActionClient(
-            self._ros, '/default_move_group/move',
-            'commander_msgs/MotionAction')
+        result = self.switch_service.call(request)
 
         message_ = {
             'motion_sequence': goal_info}  ## Creating a dictionary that looks the same as the simple motion
 
-        goal = roslibpy.actionlib.Goal(action_client, roslibpy.Message(message_))
+        goal = roslibpy.actionlib.Goal(self.action_tcp_client, roslibpy.Message(message_))
         # goal.on('feedback', lambda f: print(f))
         goal.on("feedback", lambda f: print(f))
         ## Start the goal - this is where the robot will start moving!
@@ -486,7 +483,6 @@ class RobotClient:
 
         print("[DEBUG] waiting for tcp_goal...")
         result = goal.wait(timeout)
-        action_client.dispose()
         print("[DEBUG] tcp_goal finished!...")
 
     def joint_back_home(self):
@@ -529,3 +525,29 @@ class RobotClient:
             self.beautify_print(data_dict)
 
         return data_dict
+
+    #### Turn on/off
+    def stop(self):
+        # 1. 取消订阅所有 Topics
+        self.gripper_listener.unsubscribe()
+        self.debug_listener.unsubscribe()
+        self.tcp_speed_client.unsubscribe()
+        self.tcp_pose_client.unsubscribe()
+        self.joint_states_client.unsubscribe()
+        self.power_state_client.unsubscribe()
+        self.arm_ready_client.unsubscribe()
+        self.estop_state_client.unsubscribe()
+        self.safe_stop_state_client.unsubscribe()
+
+        # 2. 取消广播所有 Publishers
+        self.jog_publisher.unadvertise()
+        self.gripper_publisher.unadvertise()
+
+        # 3. 清理 ActionClients
+        self.action_tcp_client.dispose()
+        self.action_joint_client.dispose()
+
+        # 4. 关闭 ROS 连接
+        self._ros.close()
+
+        print("[RobotClient] All resources cleaned up and roslibpy closed.")

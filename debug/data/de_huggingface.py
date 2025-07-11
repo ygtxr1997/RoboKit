@@ -5,8 +5,16 @@ api = HfApi()
 
 # 上传文件到指定的 repo
 upload_fns = [
-    "collected_data_0514_shovel_obj.zip",
-    "collected_data_0514_shovel_table.zip",
+    # "collected_data_0514_shovel_obj.zip",
+    # "collected_data_0514_shovel_table.zip",
+    # "0627_pot_source.patch01.zip",
+    # "0627_pot_source_wP01.zip",
+
+    # "0704_pepper_source.zip",
+    # "0627_pot_light.zip",
+    # "0627_pot_object.zip",
+
+    "0709_coffee_source.zip"
 ]
 
 for upload_fn in upload_fns:

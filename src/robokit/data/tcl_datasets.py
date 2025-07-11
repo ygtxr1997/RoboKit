@@ -201,6 +201,142 @@ class TCLDataset(Dataset):
         self.extracted_data[key] = np.load(path)
         print(f"[TCLDataset] loaded key={key} shape={self.extracted_data[key].shape} from {path}")
 
+    def extract_data_and_compute_statistics(
+            self,
+            keys_to_extract: List[str] = None,
+            stats_key: str = "rel_actions",
+            save_json_path: str = None,
+            batch_size: int = 256,
+            num_workers: int = 16,
+            pin_memory: bool = True,
+    ) -> dict:
+        """
+        在一次数据集遍历中同时完成：
+        1. 提取指定keys的数据并保存为.npy文件
+        2. 计算stats_key的统计信息
+
+        :param keys_to_extract: 需要提取并保存为.npy的keys列表
+        :param stats_key: 需要计算统计信息的key，默认为'rel_actions'
+        :param save_json_path: 统计信息保存路径
+        :param batch_size: 批处理大小
+        :param num_workers: 工作进程数
+        :param pin_memory: 是否使用内存锁定
+        :return: 统计信息字典
+        """
+        if keys_to_extract is None:
+            keys_to_extract = ["rel_actions"]
+
+        # 确保stats_key在load_keys中
+        if stats_key not in self.load_keys:
+            raise ValueError(f"stats_key '{stats_key}' not in load_keys: {self.load_keys}")
+
+        # 确保所有要提取的keys都在load_keys中
+        for key in keys_to_extract:
+            if key not in self.load_keys:
+                raise ValueError(f"key '{key}' not in load_keys: {self.load_keys}")
+
+        print(f"[TCLDataset] Starting combined extraction and statistics computation...")
+        print(f"[TCLDataset] Keys to extract: {keys_to_extract}")
+        print(f"[TCLDataset] Stats key: {stats_key}")
+
+        # 1. 初始化统计量（假设rel_actions有7个分量）
+        n_components = 7
+        min_vals = np.inf * np.ones(n_components, dtype=np.float64)
+        max_vals = -np.inf * np.ones(n_components, dtype=np.float64)
+        sum_vals = np.zeros(n_components, dtype=np.float64)
+        squared_sum = np.zeros(n_components, dtype=np.float64)
+        total_count = 0
+
+        # 2. 初始化数据收集容器
+        collected_data = {key: [] for key in keys_to_extract}
+
+        # 3. 自定义collate_fn：同时提取多个keys的数据
+        def collate_fn(batch):
+            result = {}
+            # 提取所有需要的keys
+            for key in keys_to_extract:
+                result[key] = np.stack([item[key] for item in batch], axis=0)
+
+            # 如果stats_key不在提取列表中，单独提取
+            if stats_key not in keys_to_extract:
+                result[stats_key] = np.stack([item[stats_key] for item in batch], axis=0)
+
+            return result
+
+        # 4. 构造DataLoader
+        loader = DataLoader(
+            self,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            collate_fn=collate_fn
+        )
+
+        # 5. 遍历DataLoader，同时更新统计量和收集数据
+        for batch_data in tqdm(loader, desc="Processing batches"):
+            # 更新统计信息
+            batch_stats_data = batch_data[stats_key]
+            if not isinstance(batch_stats_data, np.ndarray):
+                batch_stats_data = batch_stats_data.numpy()
+
+            B = batch_stats_data.shape[0]
+
+            # 更新 min/max
+            min_vals = np.minimum(min_vals, batch_stats_data.min(axis=0))
+            max_vals = np.maximum(max_vals, batch_stats_data.max(axis=0))
+
+            # 更新 sum 和 squared sum
+            sum_vals += batch_stats_data.sum(axis=0)
+            squared_sum += (batch_stats_data ** 2).sum(axis=0)
+            total_count += B
+
+            # 收集要提取的数据
+            for key in keys_to_extract:
+                batch_key_data = batch_data[key]
+                if not isinstance(batch_key_data, np.ndarray):
+                    batch_key_data = batch_key_data.numpy()
+                collected_data[key].append(batch_key_data)
+
+        # 6. 计算最终的统计信息
+        mean_vals = sum_vals / total_count
+        var_vals = (squared_sum / total_count) - (mean_vals ** 2)
+        std_vals = np.sqrt(np.maximum(var_vals, 0.0))
+
+        statistics = {
+            "min": min_vals.tolist(),
+            "max": max_vals.tolist(),
+            "mean": mean_vals.tolist(),
+            "std": std_vals.tolist(),
+            "total_len": total_count
+        }
+
+        # 7. 保存统计信息到JSON
+        if save_json_path:
+            save_path = os.path.join(getattr(self, 'root', ''), save_json_path)
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, 'w') as fp:
+                json.dump(statistics, fp, indent=4)
+            print(f"[TCLDataset] Statistics saved to: {save_path}")
+
+        # 8. 拼接并保存提取的数据
+        for key in keys_to_extract:
+            all_data = np.concatenate(collected_data[key], axis=0)
+
+            # 保存路径
+            save_path = os.path.join(self.root, f"extracted/{key}.npy")
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+            np.save(save_path, all_data)
+            print(f"[TCLDataset] Key '{key}' shape={all_data.shape} saved to '{save_path}'")
+
+            # 同时加载到extracted_data中
+            self.extracted_data[key] = all_data
+            print(f"[TCLDataset] Key '{key}' loaded to extracted_data")
+
+        print(f"[TCLDataset] Combined extraction and statistics computation completed!")
+        return statistics
+
 
 class TCLDatasetHDF5(TCLDataset):
     def __init__(self, root: str, h5_path: str, keys_config: Dict[str, str] = None, use_h5: bool = True,

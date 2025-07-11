@@ -23,6 +23,7 @@ def main(opts):
         img_hw=(480, 848),  # (480, 848)
         enable_auto_ae_wb=True,
         fps=30,
+        speed_scale=1.,
     )  # TODO: better AE-WB setting
     try:
         evaluator.run()

@@ -23,15 +23,23 @@ def preprocess(opts):
     # 2. Save and load statistics info
     print("Save and load statistics info")
     statistics_json_path = "statistics.json"
-    _ = dataset.get_statistics_and_save(
-        save_json_path=statistics_json_path, batch_size=batch_size, num_workers=num_workers)
+
+    _ = dataset.extract_data_and_compute_statistics(
+        keys_to_extract=["rel_actions"],
+        save_json_path=statistics_json_path,
+        batch_size=batch_size,
+        num_workers=num_workers,
+    )
+
+    # _ = dataset.get_statistics_and_save(
+    #     save_json_path=statistics_json_path, batch_size=batch_size, num_workers=num_workers)
     meta_info = dataset.load_statistics_from_json(json_path=statistics_json_path)
     print(meta_info)
 
     # 3. Extract data by key
-    print("Extract data by key")
-    dataset.save_to_npy_by_key(
-        "rel_actions", batch_size=batch_size, num_workers=num_workers)
+    # print("Extract data by key")
+    # dataset.save_to_npy_by_key(
+    #     "rel_actions", batch_size=batch_size, num_workers=num_workers)
     dataset.load_npy_by_key("rel_actions")
     print("save:", dataset.extracted_data['rel_actions'][opts.check_index])
 
@@ -75,7 +83,7 @@ if __name__ == "__main__":
     Example usage:
     Op1. Extract keys and statistics
     python scripts/01_preprocess_data.py  \
-        -R "/home/geyuan/local_soft/TCL/0627_pot_source"
+        -R "/home/geyuan/local_soft/TCL/0709_coffee_source"
     
     Op2. Convert to HDF5
     python scripts/01_preprocess_data.py  \
