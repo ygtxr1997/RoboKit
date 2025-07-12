@@ -20,6 +20,8 @@ dependencies = [
     "matplotlib<3.10",
     "scipy",
     "fastapi",
+    "h5py",  # speedup dataloader
+    "mediapy",  # data visualize
 ]
 # 配置项目的分类（适用于 PyPI）
 classifiers = [
@@ -42,6 +44,8 @@ dev = [
     "PyOpenGL",
     "ahrs",
     "transforms3d",
+    # VR: Quest 3
+    "pure-python-adb",
 ]
 
 

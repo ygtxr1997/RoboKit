@@ -51,8 +51,14 @@ def preprocess(opts):
 
 
 def convert_to_hdf5(opts):
-    data_root = opts.root
     num_workers = opts.num_workers
+    data_root = opts.root
+    if opts.resize == "240p":
+        resize_wh = (320, 240)
+    elif opts.resize == "480p":
+        resize_wh = None
+    else:
+        raise NotImplementedError(f"Unknown resize {opts.resize}")
 
     # 5. Convert to HDF5
     converter = TCLDatasetHDF5(
@@ -63,6 +69,7 @@ def convert_to_hdf5(opts):
     converter.convert_to_hdf5(
         num_workers=num_workers,
         pin_memory=True,
+        resize_wh=resize_wh,
     )
 
     h5_dataset = TCLDatasetHDF5(
@@ -87,14 +94,15 @@ if __name__ == "__main__":
     
     Op2. Convert to HDF5
     python scripts/01_preprocess_data.py  \
-        -R "/home/geyuan/local_soft/TCL/collected_data_0513_table"  \
-        --as_hdf5 "/home/geyuan/local_soft/TCL/hdf5/collected_data_0507.h5"
+        -R "/home/geyuan/local_soft/TCL/0627_pot_source"  \
+        --as_hdf5 "/home/geyuan/local_soft/TCL/hdf5/0627_pot_source_240p.h5"
     """
     args = argparse.ArgumentParser("Test data format")
     args.add_argument("-R", "--root", required=True, type=str, help="Root folder path")
     args.add_argument("-i", "--check_index", default=23, type=int, help="Index for checking")
     args.add_argument("--as_hdf5", default="", type=str, help="(Optional) saving HDF5 file path")
-
+    args.add_argument("--resize", default="240p", type=str,
+                      choices=["240p", "480p"], help="(Optional) resize the image, default 240p:(wh=320x240)")
     args.add_argument("-b", "--batch_size", default=32, type=int, help="batch_size")
     args.add_argument("-j", "--num_workers", default=8, type=int, help="num_workers")
     args = args.parse_args()

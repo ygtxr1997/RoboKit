@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
 
-def concatenate_rgb_images(img1, img2, vertical=False, smaller_size=2):
+def concatenate_rgb_images(img1, img2, vertical=False, resize_ratio=0.5):
     """
     拼接两个RGB图像（左右拼接）
 
@@ -21,23 +21,33 @@ def concatenate_rgb_images(img1, img2, vertical=False, smaller_size=2):
     """
     height = img1.shape[0]
     width = img1.shape[1]
-    img1 = np.array(Image.fromarray(img1).resize((width // smaller_size, height // smaller_size)))
+    img1 = np.array(Image.fromarray(img1).resize((int(width * resize_ratio), int(height * resize_ratio))))
     hw_ratio2 = float(img2.shape[0]) / float(img2.shape[1])
 
     if not vertical:
         # 确保两个图像的高度相同
-        img2 = np.array(Image.fromarray(img2).resize((int(height / hw_ratio2) // smaller_size, height // smaller_size)))
+        img2 = np.array(Image.fromarray(img2).resize((int(int(height / hw_ratio2) * resize_ratio),
+                                                      int(height * resize_ratio))))
         # 使用numpy的hstack来拼接两个图像
         return np.hstack((img1, img2))
     else:
         # 确保两个图像的宽度相同
-        img2 = np.array(Image.fromarray(img2).resize((width // smaller_size, int(width * hw_ratio2) // smaller_size)))
+        img2 = np.array(Image.fromarray(img2).resize((int(width * resize_ratio),
+                                                      int(int(width * hw_ratio2) * resize_ratio))))
         # 使用numpy的vstack来拼接两个图像
         return np.vstack((img1, img2))
 
 
 def plot_action_wrt_time(action_data: np.ndarray):
+    """
+    Plot action wrt time
+    :param action_data: (T,7)
+    :return: (frames, fig, (ax1, ax2)
+        frames: A list of RGB images
+    """
     frames_cnt = action_data.shape[0]
+    action_dim = action_data.shape[1]
+    assert action_dim >= 3
 
     # 创建一个图和两个子图（1行2列）
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
@@ -53,8 +63,8 @@ def plot_action_wrt_time(action_data: np.ndarray):
     ax1.legend()
 
     # --- 子图2：a, b, c, g ---
-    labels_abcg = ['a', 'b', 'c', 'g']
-    styles_abcg = ['dashed', 'dashed', 'dashed', 'dotted']
+    labels_abcg = ['a', 'b', 'c', 'g'][:(action_dim - 3)]
+    styles_abcg = ['dashed', 'dashed', 'dashed', 'dotted'][:(action_dim - 3)]
     lines_abcg = [ax2.plot([], [], label=label, linestyle=style)[0] for label, style in zip(labels_abcg, styles_abcg)]
     ax2.set_xlim(0, frames_cnt)
     ax2.set_ylim(np.min(action_data[:, 3:])-0.02, np.max(action_data[:, 3:])+0.02)
@@ -65,6 +75,7 @@ def plot_action_wrt_time(action_data: np.ndarray):
     # 帧图列表
     frames = []
 
+    print("Plotting action dynamic figures...")
     for frame_num in range(frames_cnt):
         # 更新 xyz 曲线
         for i, line in enumerate(lines_xyz):
@@ -85,7 +96,8 @@ def plot_action_wrt_time(action_data: np.ndarray):
 
 
 class DynamicDataDrawer(ABC):
-    def __init__(self, data_provider, data_keys: List[List[str]], max_points: int = 1000):
+    def __init__(self, data_provider, data_keys: List[List[str]], max_points: int = 1000,
+                 y_minmax_values: List[List[float]] = None):
         self.data_provider = data_provider
         self.data_keys_grouped = data_keys  # 二维列表
         self.max_points = max_points
@@ -97,7 +109,9 @@ class DynamicDataDrawer(ABC):
 
         self.colors = ['r', 'g', 'b', 'c', 'm', 'y']
         self.linestyles = ['solid'] * 3 + ['dashed'] * 3
-        self.y_minmax_values = [[-10, 10], [-20, 20], [-200, 200], [-2.4, 2.4]]  # 一组子图一个范围
+        if y_minmax_values is None:
+            y_minmax_values = [[-10, 10], [-20, 20], [-200, 200], [-2.4, 2.4]]  # 一组子图一个范围
+        self.y_minmax_values = y_minmax_values
 
         # 设置子图行列
         self.n_subplots = len(data_keys)

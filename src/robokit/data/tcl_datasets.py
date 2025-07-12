@@ -403,7 +403,7 @@ class TCLDatasetHDF5(TCLDataset):
         return (s_trim + end_token.decode('utf-8')).ljust(max_len, ' ').encode('utf-8')
 
     @staticmethod
-    def binary_to_image(binary_data, decode_image: bool = True):
+    def binary_to_image(binary_data: bytes, decode_image: bool = True):
         """将二进制数据转换回 PIL 图像"""
         buffer = BytesIO(binary_data)  # 保持 buffer 在内存中
         if decode_image:
@@ -412,6 +412,14 @@ class TCLDatasetHDF5(TCLDataset):
             return pil_image
         else:
             return np.array(binary_data)
+
+    @staticmethod
+    def image_to_binary(pil_image: Image.Image, fn_format='JPEG') -> bytes:
+        """将 PIL 图像转换为二进制数据"""
+        with BytesIO() as buffer:
+            pil_image.save(buffer, format=fn_format)  # 或使用其他格式如 PNG
+            binary_data = buffer.getvalue()
+        return binary_data
 
     def convert_to_hdf5(self, batch_size: int = 16, num_workers: int = 0, pin_memory: bool = False,
                         resize_wh: Tuple[int, int] = None):
@@ -470,10 +478,22 @@ class TCLDatasetHDF5(TCLDataset):
                     ], dtype='S300')
                 elif kind in ('rgb', 'depth'):
                     if not self.is_img_decoded_in_h5:
-                        out[k] = np.array([
-                            np.frombuffer(self._extract_image_bytes(x), dtype=np.uint8)
-                            for x in items
-                        ], dtype=object)
+                        if not resize_wh:  # Op1. no need to resize
+                            out[k] = np.array([
+                                np.frombuffer(self._extract_image_bytes(x), dtype=np.uint8)
+                                for x in items
+                            ], dtype=object)
+                        else:  # Op2. needs resize
+                            out[k] = np.array([
+                                np.frombuffer(
+                                    self.image_to_binary(
+                                        self.binary_to_image(self._extract_image_bytes(x)).resize(resize_wh),
+                                        fn_format='JPEG' if kind == 'rgb' else 'png'
+                                    ),
+                                    dtype=np.uint8
+                                )
+                                for x in items
+                            ], dtype=object)
                     else:
                         # 解码后的 RGB 应该是 (480, 848, 3)，堆叠为 (B, 480, 848, 3)
                         out[k] = np.stack([np.array(Image.fromarray(x).resize(resize_wh)) for x in items], axis=0)
@@ -492,7 +512,7 @@ class TCLDatasetHDF5(TCLDataset):
 
         # 4. 批量写入 HDF5
         idx = 0
-        for batch in tqdm(loader, desc="Writing HDF5 batches"):
+        for batch in tqdm(loader, desc=f"Writing HDF5, wxh={resize_wh}"):
             bsize = next(iter(batch.values())).shape[0]
             for k, data in batch.items():
                 datasets[k][idx:idx + bsize] = data
