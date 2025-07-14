@@ -701,3 +701,31 @@ class KeyboardController:
         keys = self.keys
         
 
+class QuestController:
+    def __init__(self,
+                 robot: RobotClient, saving_root: str,
+                 task_instruction: str,
+                 action_fps: int = 30,
+                 enable_auto_ae_wb: bool = True,
+                 ae_wb_params: List[Dict] = None,
+                 # Data saving
+                 saving_workers: int = 6,
+                 ):
+        pygame.font.init()
+        pygame.display.init()
+
+        self.screen = pygame.display.set_mode((800, 600))
+        pygame.display.set_caption("TCP Data Visualization")
+
+        self.robot = robot
+        self.linear_scale = 0.1
+        self.angular_scale = 0.1
+        self.fps = action_fps
+
+        # Dynamic
+        self.linear_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+        self.angular_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+        self.z_39 = 0.  # left-right axis of z, only used by angular jog move
+        self.g = 0.  # 0:open, 1:close
+
+
