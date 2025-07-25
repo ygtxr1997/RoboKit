@@ -491,6 +491,12 @@ class RobotClient:
                                 0, pi / 2, pi]
         self.joint_goal_send(home_joint_positions)
 
+    def joint_back_coffee(self):
+        pi = math.pi
+        home_joint_positions = [-14.7, -34.7, 63.4, -12, 113.6, 161.4]
+        home_joint_positions = [x / 180 * pi for x in home_joint_positions]
+        self.joint_goal_send(home_joint_positions)
+
     def tcp_back_home(self):
         """ More safe comparing with joint_back_home """
         home_tcp_pos = {'x': 0.0, 'y': 0.4, 'z': 0.4567}

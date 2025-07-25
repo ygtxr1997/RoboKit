@@ -274,6 +274,7 @@ class QuestHandler(OculusReader):
 
         self.q_last = np.array([1.0, 0.0, 0.0, 0.0])  # last pose, output by get_latest_euler()
         self.q_now = np.array([1.0, 0.0, 0.0, 0.0])  # current pose
+        self.q_rel = np.array([1.0, 0.0, 0.0, 0.0])  # q_now <- q_last + q_rel
         self.rpy_rel = np.zeros(3)  # q_now <- q_last + rpy_rel
         self.rpy_now = np.zeros(3)  # 'sxyz' order of current pose ``q_now``
 
@@ -289,6 +290,7 @@ class QuestHandler(OculusReader):
 
         self.q_last = np.array([1.0, 0.0, 0.0, 0.0])  # last pose, output by get_latest_euler()
         self.q_now = np.array([1.0, 0.0, 0.0, 0.0])  # current pose
+        self.q_rel = np.array([1.0, 0.0, 0.0, 0.0])  # q_now <- q_last + q_rel
         self.rpy_rel = np.zeros(3)  # q_now <- q_last + rpy_rel
         self.rpy_now = np.zeros(3)  # 'sxyz' order of current pose ``q_now``
 
@@ -306,7 +308,7 @@ class QuestHandler(OculusReader):
                 # Set: q_last, xyz_last
                 with self._lock:
                     self._acquire_euler_evt = False
-                    d_q_rot = qmult(self.q_now, qinverse(self.q_last))
+                    self.q_rel = d_q_rot = qmult(self.q_now, qinverse(self.q_last))
                     self.rpy_rel = np.degrees(quat2euler(d_q_rot, axes='sxyz'))
                     self.q_last = self.q_now
 
@@ -317,6 +319,7 @@ class QuestHandler(OculusReader):
 
             try:
                 line = file_obj.readline().strip()
+                print(line)
                 data = self.extract_data(line)
                 if data:
                     transforms, buttons = OculusReader.process_data(data)
@@ -327,6 +330,7 @@ class QuestHandler(OculusReader):
                     d_translation = right_transform[:3, 3]  # (3x1) -> (3,)
 
                     with self._lock:
+                        # self.q_rel = qmult(d_q_rotation, qinverse(self.q_now))
                         self.q_now = d_q_rotation  # qmult(self.q_now, d_q_rotation)
                         self.rpy_now = np.degrees(quat2euler(self.q_now, axes='sxyz'))
                         self.xyz_now = d_translation  # self.xyz_now + d_translation
@@ -345,13 +349,15 @@ class QuestHandler(OculusReader):
             self._reset_evt = True
 
     def get_latest_euler(self):
+        self._acquire_euler_evt = True
         with self._lock:
             return {
                 'euler': self.rpy_rel,
+                'quat': self.q_rel,
                 'xyz': self.xyz_rel,
                 'now_euler': self.rpy_now,
                 'now_xyz': self.xyz_now,
-                'quat': self.q_now,
+                'now_quat': self.q_now,
             }
 
     def get_last_buttons(self):

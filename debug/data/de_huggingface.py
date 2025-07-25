@@ -14,7 +14,9 @@ upload_fns = [
     # "0627_pot_light.zip",
     # "0627_pot_object.zip",
 
-    "0709_coffee_source.zip"
+    # "0709_coffee_source.zip",
+
+    "0718_many_rand.zip"
 ]
 
 for upload_fn in upload_fns:

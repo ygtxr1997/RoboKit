@@ -10,6 +10,10 @@ from datetime import datetime
 import time
 import cv2
 from collections import deque
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, FFMpegWriter
+
 
 
 class DataHandler:
@@ -285,3 +289,428 @@ class ImageAsVideoSaver:
         # 释放 VideoWriter
         out.release()
         print(f"Video saved at {path}")
+
+
+class ActionAsVideoSaver:
+    def __init__(self, buffer_size=200, frame_rate=30, width=12, height=8,
+                 action_names=None, window_size=100):
+        """
+        初始化ActionAsVideoSaver - 延迟创建图形以节省内存
+
+        动作可视化约定：
+        - 前3维 (XYZ): 用实线显示，代表位置信息
+        - 后4维 (RPY + Gripper): 用虚线显示，代表旋转和夹爪信息
+
+        Args:
+            buffer_size: 最大缓存的动作序列数量
+            frame_rate: 视频帧率
+            width: 图形宽度 (英寸)
+            height: 图形高度 (英寸)
+            action_names: 7个动作维度的名称列表
+            window_size: 时间序列图显示的时间窗口大小
+        """
+        self.buffer_size = buffer_size
+        self.frame_rate = frame_rate
+        self.window_size = window_size
+        self.width = width
+        self.height = height
+
+        # 7维动作的默认名称
+        if action_names is None:
+            self.action_names = ['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw', 'Gripper']
+        else:
+            assert len(action_names) == 7, "action_names must have exactly 7 elements"
+            self.action_names = action_names
+
+        # 使用队列存储动作序列
+        self.action_queue = deque(maxlen=self.buffer_size)
+
+        # 设置颜色和线型
+        self.colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink']
+        self.linestyles = ['-', '-', '-', '--', '--', '--', '--']  # 前3个实线，后4个虚线
+        self.linewidths = [2.5, 2.5, 2.5, 2.0, 2.0, 2.0, 2.0]  # 前3个稍粗
+
+        # 所有7个维度在一个图中显示
+        self.all_dimensions = list(range(7))  # [0, 1, 2, 3, 4, 5, 6]
+
+        # Y轴范围设置
+        self.y_range = [-0.5, 0.5]  # 统一的Y轴范围
+
+        # 延迟创建matplotlib对象
+        self.fig = None
+        self.ax = None
+        self.lines = {}
+        self.current_frame = 0
+
+    def add_action(self, action: np.ndarray):
+        """向队列中添加一个7维动作"""
+        action = np.array(action)
+        assert action.shape == (7,), f"Action must be 7-dimensional, got shape {action.shape}"
+        self.action_queue.append(action.copy())
+
+    def add_action_sequence(self, actions: np.ndarray):
+        """批量添加动作序列"""
+        actions = np.array(actions)
+        assert actions.shape[1] == 7, f"Actions must have 7 dimensions, got shape {actions.shape}"
+
+        for action in actions:
+            self.add_action(action)
+
+    def _setup_figure(self):
+        """延迟创建matplotlib图形"""
+        if self.fig is not None:
+            return
+
+        # 设置非交互式backend避免内存问题
+        matplotlib.use('Agg')
+
+        # 创建图形和子图 - 只有一个子图显示所有7个维度
+        self.fig, self.ax = plt.subplots(1, 1, figsize=(self.width, self.height))
+        self.lines = {}
+
+    def _init_animation(self):
+        """初始化动画图表"""
+        self._setup_figure()
+
+        self.ax.clear()
+
+        # 为所有7个动作维度创建线条
+        for action_idx in self.all_dimensions:
+            line, = self.ax.plot([], [],
+                                 label=self.action_names[action_idx],
+                                 color=self.colors[action_idx],
+                                 linestyle=self.linestyles[action_idx],
+                                 linewidth=self.linewidths[action_idx])
+            self.lines[action_idx] = line
+
+        # 设置图表属性
+        self.ax.set_xlim(0, self.window_size)
+        self.ax.set_ylim(self.y_range)
+        self.ax.set_title('7D Robot Action Sequence (XYZ: solid, RPY&G: dashed)',
+                          fontsize=12, fontweight='bold')
+        self.ax.set_xlabel('Time Steps')
+        self.ax.set_ylabel('Action Value')
+        self.ax.legend(loc='lower left', ncol=2)
+        self.ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        return list(self.lines.values())
+
+    def _update_animation(self, frame):
+        """更新动画帧"""
+        if len(self.action_queue) == 0:
+            return list(self.lines.values())
+
+        # 确定当前显示的数据范围
+        end_idx = min(frame + 1, len(self.action_queue))
+        start_idx = max(0, end_idx - self.window_size)
+
+        if end_idx > start_idx:
+            # 获取当前窗口的动作数据
+            window_actions = np.array(list(self.action_queue)[start_idx:end_idx])
+            time_steps = np.arange(start_idx, end_idx)
+
+            # 更新每条线的数据
+            for action_idx in range(7):
+                if action_idx in self.lines:
+                    self.lines[action_idx].set_data(time_steps, window_actions[:, action_idx])
+
+            # 动态调整X轴范围
+            if end_idx > self.window_size:
+                self.ax.set_xlim(start_idx, end_idx)
+            else:
+                self.ax.set_xlim(0, self.window_size)
+
+        return list(self.lines.values())
+
+    def save_to_video(self, path: str, show_progress=True):
+        """
+        将动作序列保存为视频
+
+        Args:
+            path: 保存视频的路径（例如: 'actions.mp4'）
+            show_progress: 是否显示进度信息
+        """
+        if len(self.action_queue) == 0:
+            print("No actions in the queue to save.")
+            return
+
+        # Save action .npy
+        action_npy = np.array(list(self.action_queue))
+        npy_save_path = path.replace('.mp4', '.npy')
+        np.save(npy_save_path, action_npy)
+
+        if show_progress:
+            print(f"Creating video with {len(self.action_queue)} frames...")
+
+        # 确保图形已创建
+        self._setup_figure()
+
+        # 创建动画
+        anim = FuncAnimation(
+            self.fig,
+            self._update_animation,
+            init_func=self._init_animation,
+            frames=len(self.action_queue),
+            interval=1000 // self.frame_rate,  # 转换为毫秒
+            blit=False,
+            repeat=False
+        )
+
+        # 保存为视频
+        writer = FFMpegWriter(
+            fps=self.frame_rate,
+            metadata=dict(artist='ActionAsVideoSaver'),
+            bitrate=1250
+        )
+
+
+
+        try:
+            anim.save(path, writer=writer, progress_callback=lambda i, n:
+            print(f"Progress: {i + 1}/{n} frames") if show_progress and (i + 1) % 20 == 0 else None)
+            if show_progress:
+                print(f"Video saved successfully at {path}")
+        except Exception as e:
+            print(f"Error saving video: {e}")
+            print("Make sure you have ffmpeg installed: conda install ffmpeg")
+        finally:
+            # 清理资源
+            plt.close(self.fig)
+            self.fig = None
+            self.ax = None
+            self.lines = {}
+
+    def preview_animation(self):
+        """预览动画（在jupyter notebook中很有用）"""
+        if len(self.action_queue) == 0:
+            print("No actions in the queue to preview.")
+            return None
+
+        # 确保图形已创建
+        self._setup_figure()
+
+        anim = FuncAnimation(
+            self.fig,
+            self._update_animation,
+            init_func=self._init_animation,
+            frames=len(self.action_queue),
+            interval=1000 // self.frame_rate,
+            blit=False,
+            repeat=True
+        )
+
+        plt.tight_layout()
+        plt.show()
+        return anim
+
+    def clear_buffer(self):
+        """清空动作缓存"""
+        self.action_queue.clear()
+
+    def get_buffer_size(self):
+        """获取当前缓存中的动作数量"""
+        return len(self.action_queue)
+
+    def set_y_range(self, y_min, y_max):
+        """
+        设置Y轴范围
+        Args:
+            y_min: Y轴最小值
+            y_max: Y轴最大值
+        """
+        self.y_range = [y_min, y_max]
+
+    def __del__(self):
+        """析构函数，清理matplotlib资源"""
+        if self.fig is not None:
+            plt.close(self.fig)
+
+
+class ActionAsVideoSaverV1:
+    def __init__(self, buffer_size=100, frame_rate=30, width=800, height=600,
+                 action_names=None, window_size=50):
+        """
+        初始化ActionAsVideoSaver
+
+        动作可视化约定：
+        - 前3维 (XYZ): 用实线显示，代表位置信息
+        - 后4维 (RPY + Gripper): 用虚线显示，代表旋转和夹爪信息
+
+        Args:
+            buffer_size: 最大缓存的动作序列数量
+            frame_rate: 视频帧率
+            width: 视频宽度
+            height: 视频高度
+            action_names: 7个动作维度的名称列表，如果为None则使用默认名称
+            window_size: 时间序列图显示的时间窗口大小
+        """
+        self.buffer_size = buffer_size
+        self.frame_rate = frame_rate
+        self.width = width
+        self.height = height
+        self.window_size = window_size
+
+        # 7维动作的默认名称
+        if action_names is None:
+            self.action_names = ['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw', 'Gripper']
+        else:
+            assert len(action_names) == 7, "action_names must have exactly 7 elements"
+            self.action_names = action_names
+
+        # 使用队列存储动作序列
+        self.action_queue = deque(maxlen=self.buffer_size)
+
+        # 设置matplotlib参数
+        plt.style.use('default')
+        self.colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink']
+
+    def add_action(self, action: np.ndarray):
+        """
+        向队列中添加一个7维动作
+
+        Args:
+            action: 7维numpy数组，表示一个时刻的动作
+        """
+        action = np.array(action)
+        assert action.shape == (7,), f"Action must be 7-dimensional, got shape {action.shape}"
+
+        self.action_queue.append(action.copy())
+
+    def add_action_sequence(self, actions: np.ndarray):
+        """
+        批量添加动作序列
+
+        Args:
+            actions: shape为(sequence_length, 7)的numpy数组
+        """
+        actions = np.array(actions)
+        assert actions.shape[1] == 7, f"Actions must have 7 dimensions, got shape {actions.shape}"
+
+        for action in actions:
+            self.add_action(action)
+
+    def _create_frame(self, current_step):
+        """
+        创建当前时刻的可视化帧
+
+        Args:
+            current_step: 当前步数
+
+        Returns:
+            numpy数组形式的图像帧
+        """
+        # 创建图形
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(self.width / 100, self.height / 100), dpi=100)
+
+        # 获取当前窗口的数据
+        start_idx = max(0, current_step - self.window_size)
+        end_idx = current_step + 1
+
+        if end_idx <= len(self.action_queue):
+            window_actions = list(self.action_queue)[start_idx:end_idx]
+            window_actions = np.array(window_actions)
+            time_steps = np.arange(start_idx, end_idx)
+
+            # 上半部分：时间序列图
+            ax1.set_title('Action Time Series (XYZ: solid lines, RPY&Gripper: dashed lines)', fontsize=12,
+                          fontweight='bold')
+            for i in range(7):
+                # 前3维(XYZ)用实线，后4维(RPY和Gripper)用虚线
+                linestyle = '-' if i < 3 else '--'
+                linewidth = 2.5 if i < 3 else 2.0
+
+                ax1.plot(time_steps, window_actions[:, i],
+                         color=self.colors[i], label=self.action_names[i],
+                         linewidth=linewidth, linestyle=linestyle)
+
+            # 标记当前时刻
+            if len(window_actions) > 0:
+                current_action = window_actions[-1]
+                for i in range(7):
+                    ax1.scatter(current_step, current_action[i],
+                                color=self.colors[i], s=50, zorder=5)
+
+            ax1.set_xlabel('Time Step')
+            ax1.set_ylabel('Action Value')
+            ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax1.grid(True, alpha=0.3)
+
+            # 下半部分：当前动作的条形图
+            ax2.set_title('Current Action Values', fontsize=14, fontweight='bold')
+            if len(window_actions) > 0:
+                current_action = window_actions[-1]
+                bars = ax2.bar(range(7), current_action, color=self.colors, alpha=0.7)
+
+                # 添加数值标签
+                for i, (bar, value) in enumerate(zip(bars, current_action)):
+                    height = bar.get_height()
+                    ax2.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
+                             f'{value:.3f}', ha='center', va='bottom', fontsize=10)
+
+            ax2.set_xlabel('Action Dimension')
+            ax2.set_ylabel('Value')
+            ax2.set_xticks(range(7))
+            ax2.set_xticklabels(self.action_names, rotation=45, ha='right')
+            ax2.grid(True, alpha=0.3, axis='y')
+
+        # 调整布局
+        plt.tight_layout()
+
+        # 将图像转换为numpy数组
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        buf.seek(0)
+
+        # 读取图像数据
+        img_arr = plt.imread(buf)
+        plt.close(fig)
+
+        # 转换为BGR格式并调整大小
+        if img_arr.dtype == np.float32 or img_arr.dtype == np.float64:
+            img_arr = (img_arr * 255).astype(np.uint8)
+
+        img_bgr = cv2.cvtColor(img_arr, cv2.COLOR_RGB2BGR)
+        img_bgr = cv2.resize(img_bgr, (self.width, self.height))
+
+        return img_bgr
+
+    def save_to_video(self, path: str):
+        """
+        将动作序列保存为视频
+
+        Args:
+            path: 保存视频的路径（例如: 'actions.mp4'）
+        """
+        if len(self.action_queue) == 0:
+            print("No actions in the queue to save.")
+            return
+
+        # 获取视频编码器
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
+        # 创建VideoWriter对象
+        out = cv2.VideoWriter(path, fourcc, self.frame_rate, (self.width, self.height))
+
+        print(f"Creating video with {len(self.action_queue)} frames...")
+
+        # 为每个时间步创建帧
+        for step in range(len(self.action_queue)):
+            frame = self._create_frame(step)
+            out.write(frame)
+
+            # 显示进度
+            if (step + 1) % 10 == 0:
+                print(f"Processed {step + 1}/{len(self.action_queue)} frames")
+
+        # 释放VideoWriter
+        out.release()
+        print(f"[ActionAsVideoSaver] Video saved at {path}")
+
+    def clear_buffer(self):
+        """清空动作缓存"""
+        self.action_queue.clear()
+
+    def get_buffer_size(self):
+        """获取当前缓存中的动作数量"""
+        return len(self.action_queue)
