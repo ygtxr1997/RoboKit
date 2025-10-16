@@ -20,6 +20,7 @@ class RealWorldEvaluator:
                  cur_task_text: str,
                  run_loops: int = 100,
                  img_hw: tuple = (256, 256),
+                 resize_hw: tuple = None,
                  fps: int = 5,
                  enable_auto_ae_wb: bool = True,
                  buffer_size: int = 1,
@@ -34,6 +35,7 @@ class RealWorldEvaluator:
         self.cur_task_text = cur_task_text
         self.run_loops = run_loops
         self.img_hw = img_hw
+        self.connector.resize_hw = resize_hw
         self.start_time = time.time()
 
         self.fps = fps
@@ -101,7 +103,8 @@ class RealWorldEvaluator:
         # cur_task_text = "pick up the shovel and put it into the cup"
         cur_task_text = self.cur_task_text
         buffer_size = self.buffer_size
-        self.connector.reset(cur_task_text)
+        self.connector.init_socket(cur_task_text)
+        self.connector.send_reset(cur_task_text)
         self.reset()
 
         for _ in tqdm(range(200), desc="Skipping frames:"):
@@ -183,15 +186,15 @@ class RealWorldEvaluator:
 
                 # 2. Send observation to GPU model, to get action
                 # print(cur_primary_rgb[-1].shape)
-                action = self.connector.step(
-                    primary_rgb=cur_primary_rgb,  # (T,H,W,C) to List[str]
-                    gripper_rgb=cur_gripper_rgb,
+                action = self.connector.send_obs_and_get_action(
+                    primary_rgb=cur_primary_rgb[None, :],  # (1,T,H,W,C) to List[str]
+                    gripper_rgb=cur_gripper_rgb[None, :],
                     task_description=cur_task_text,
-                    joint_state=cur_joint_state,  # [[0.] * 6] * T
+                    joint_state=np.array(cur_joint_state)[None, :],  # [[0.] * 6] * T -> (1,T,6)
                 )
-                assert action.shape[1] == 7, f"action.shape={action.shape} is not (:,7)"
+                assert action.shape[-1] == 7, f"action.shape[-1]={action.shape} is not (:,7)"
                 print("[Info]", self.step_cnt,
-                      self.format_array(action),
+                      self.format_array(action), "\n",
                       self.format_array(np.array(cur_joint_state)),
                       cur_task_text[:20],
                 )
@@ -205,14 +208,14 @@ class RealWorldEvaluator:
                 #             action[h, 2] = 0.7 * action[h, 2]
 
                 # 4. Conduct action in real-world environment
-                self.step(action[0, :])
+                self.step(action_D=action[0, 0, :])
                 self.on_gripper_move()
                 # Robot arm conducting delay
                 self.time_tok()
                 self.step_cnt += 1
 
                 # Save current action
-                self.action_saver.add_action(action[0, :])
+                self.action_saver.add_action(action[0, 0, :])
 
                 if self.step_cnt >= self.run_loops:
                     break  # Finished
@@ -250,16 +253,17 @@ class RealWorldEvaluator:
         ])  # shape:(14,)
 
         env_obs_dict = {
-            "primary_rgb": camera_data['color2'],
-            "gripper_rgb": camera_data['color1'],
-            "primary_depth": camera_data['depth2'],
-            "gripper_depth": camera_data['depth1'],
+            "primary_rgb": camera_data['color1'],
+            "gripper_rgb": camera_data['color2'],
+            "primary_depth": camera_data['depth1'],
+            "gripper_depth": camera_data['depth2'],
             "robot_obs": frame_robot_obs,
         }
         return env_obs_dict
 
-    def step(self, action: np.ndarray) -> None:
+    def step(self, action_D: np.ndarray) -> None:
         """ Send action to Robotic Arm """
+        action = action_D.tolist()
         for i in range(3):
             if abs(action[i]) > 0.1:
                 print("[Warning] bad action!!!", action[i])

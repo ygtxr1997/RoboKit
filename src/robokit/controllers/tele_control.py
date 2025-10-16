@@ -191,6 +191,9 @@ class BaseController:
                         end_episode_pressed = False
                         self.on_end_episode()
 
+                ft_data = self.ftsensor.read_ft()  # (fx, fy, fz, mx, my, mz)
+                self.on_large_force_detected(ft_data[2])
+
                 # Save data_manager
                 if self.need_saving:
                     assert self.saving_dir is not None
@@ -341,12 +344,13 @@ class BaseController:
     def is_angular_jog_pressed(self) -> bool: pass
 
     @abstractmethod
-    def on_rumble(self) -> None: pass
+    def on_rumble(self, **kwargs) -> None: pass
 
     ''' Default behavior when some Events are detected '''
     def on_before_exit(self) -> None: pass
     def on_after_exit(self) -> None: pass
     def on_angular_button_released(self) -> None: pass
+    def on_large_force_detected(self, force_val: float) -> None: pass
 
     def on_back_home(self) -> None:
         self.robot.joint_back_home()
@@ -478,8 +482,8 @@ class SwitchProController(BaseController):
     def get_end_episode_button(self) -> int:
         return 3
 
-    def on_rumble(self) -> None:
-        self.joystick.rumble(0.4, 0.4, 300)
+    def on_rumble(self, low_freq=0.4, high_freq=0.4, duration=300) -> None:
+        self.joystick.rumble(low_freq, high_freq, duration)
 
 
 class SwitchProIMUController(SwitchProController):
@@ -598,8 +602,18 @@ class PS5DualSenseController(BaseController):
     def get_end_episode_button(self) -> int:
         return 3
 
-    def on_rumble(self) -> None:
-        self.joystick.rumble(0.2, 0.4, 100)
+    def on_rumble(self, low_freq=0.2, high_freq=0.4, duration=100) -> None:
+        self.joystick.rumble(low_freq, high_freq, duration)
+
+    def on_large_force_detected(self, force_val: float) -> None:
+        # return  # disable rumble for FT300
+        # print("[DEBUG] force_val:", force_val)
+        return
+        large_threshold = -107.4
+        force_val = large_threshold - force_val
+        if force_val > 0:
+            self.on_rumble(low_freq=0.05, high_freq=0.2*(1 + force_val), duration=50)
+
 
 
 class PS5DualSenseIMUController(PS5DualSenseController):

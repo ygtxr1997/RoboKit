@@ -14,9 +14,11 @@ class ServiceConnector:
     def __init__(
             self,
             base_url: str = "http://localhost:6060",
+            resize_hw: tuple = None,
     ):
         self.base_url = base_url
         self.http_session = requests.Session()
+        self.resize_hw = resize_hw
 
         # Dynamic
         self.max_cache_actions = 1
@@ -38,7 +40,7 @@ class ServiceConnector:
         self.task_instruction = task_instruction
         return max_cache_action
 
-    def send_reset(self, task_instruction: str) -> int:
+    def send_reset(self, task_instruction: str = None) -> int:
         resp = self.http_session.get(f"{self.base_url}/reset")
         resp.raise_for_status()
         resp = resp.json()
@@ -56,15 +58,15 @@ class ServiceConnector:
             primary_rgb: np.ndarray,  # (B,T,H,W,C) uint8
             gripper_rgb: np.ndarray,  # (B,T,H,W,C) uint8
             task_description: Optional[str] = None,
-            joint_state: Optional[Sequence] = None,
+            joint_state: np.ndarray = None,
             *args, **kwargs
     ) -> np.ndarray:
         """
 
-        :param primary_rgb:
-        :param gripper_rgb:
+        :param primary_rgb: (B,T,H,W,C) uint8
+        :param gripper_rgb: (B,T,H,W,C) uint8
         :param task_description:
-        :param joint_state:
+        :param joint_state:  (B,T,D) float32
         :param args:
         :param kwargs:
         :return: actions predicted by the agent, (B,1,D)
@@ -72,14 +74,21 @@ class ServiceConnector:
         if self.send_cnt % self.max_cache_actions == 0:
             print(f"[ServiceConnector] sending frames, i={self.send_cnt}, per={self.max_cache_actions}, "
                   f"i%per={self.send_cnt % self.max_cache_actions}")
+            gt_video = cat_multiview_video_with_another(
+                primary_rgb,
+                gripper_rgb,
+                sample_n_views=1,
+            )
+            gt_video = self.resize_video(gt_video)
+            if joint_state.shape[-1] == 6:  # only contains TCP xyz + abc
+                B, T, D = joint_state.shape
+                joint_state = np.concatenate((joint_state, np.zeros((B, T, 2))), axis=-1)
+            assert joint_state.shape[-1] == 8, "Joint state should be 8-dim."
+
             request_to_policy = StepRequestFromEvaluator.encode_from_raw(
                 instruction=task_description,
                 stage_flag=0,
-                gt_video=cat_multiview_video_with_another(
-                    primary_rgb,
-                    gripper_rgb,
-                    sample_n_views=1,
-                ),
+                gt_video=gt_video,
                 tcp_state=joint_state,
             )
 
@@ -104,23 +113,61 @@ class ServiceConnector:
         return ret_actions
 
     @staticmethod
-    def img_np_to_base64(image: np.ndarray) -> List[str]:
-        assert image.dtype == np.uint8
+    # Resize images to target size
+    def resize_image(img_array: np.ndarray, target_hw: tuple, is_depth: bool = False) -> np.ndarray:
+        """
+        Resize image array to target height and width
+        :param img_array: (H, W, C) for RGB or (H, W) for depth
+        :param target_hw: (target_height, target_width)
+        :param is_depth: whether the image is depth map
+        :return: resized image array
+        """
+        if img_array is None:
+            return img_array
+        pil_img = Image.fromarray(img_array)
+        # Use NEAREST for depth to preserve values, BILINEAR for RGB
+        resample_method = Image.NEAREST if is_depth else Image.BILINEAR
+        resized_img = pil_img.resize(
+            (target_hw[1], target_hw[0]),  # PIL uses (width, height)
+            resample=resample_method
+        )
+        return np.array(resized_img)
 
-        def image_to_base64(img):
-            image_pil = Image.fromarray(img)
-            image_bytes = io.BytesIO()
-            image_pil.save(image_bytes, format="JPEG")
-            image_bytes = image_bytes.getvalue()
-            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-            return image_base64
+    def resize_video(self, vid_array_B_T_H_W_C: np.ndarray, is_depth: bool = False) -> np.ndarray:
+        """
+        Resize video array to target height and width
+        :param vid_array_B_T_H_W_C: (B, T, H, W, C) for RGB or (B, T, H, W) for depth
+        :param is_depth: whether the video is depth map
+        :return: resized video array
+        """
+        if vid_array_B_T_H_W_C is None or self.resize_hw is None:
+            return vid_array_B_T_H_W_C
 
-        if image.ndim == 3:  # Single frame
-            image_base64 = [image_to_base64(image)]
+        # Get original shape
+        original_shape = vid_array_B_T_H_W_C.shape
+
+        # Reshape to (B*T, H, W, C) or (B*T, H, W) for batch processing
+        if vid_array_B_T_H_W_C.ndim == 5:  # RGB: (B, T, H, W, C)
+            B, T = original_shape[:2]
+            reshaped = vid_array_B_T_H_W_C.reshape(-1, *original_shape[2:])  # (B*T, H, W, C)
+        elif vid_array_B_T_H_W_C.ndim == 4:  # Depth: (B, T, H, W)
+            B, T = original_shape[:2]
+            reshaped = vid_array_B_T_H_W_C.reshape(-1, *original_shape[2:])  # (B*T, H, W)
         else:
-            assert image.ndim == 4  # Multi frames
-            image_base64 = [image_to_base64(img) for img in image]
+            raise ValueError(f"Expected 4D or 5D array, got {vid_array_B_T_H_W_C.ndim}D array")
 
-        return image_base64
+        # Resize all frames
+        target_hw = self.resize_hw
+        resized_frames = [
+            ServiceConnector.resize_image(frame, target_hw, is_depth)
+            for frame in reshaped
+        ]
+        resized_array = np.stack(resized_frames, axis=0)
+
+        # Reshape back to (B, T, target_h, target_w, C) or (B, T, target_h, target_w)
+        if vid_array_B_T_H_W_C.ndim == 5:
+            return resized_array.reshape(B, T, target_hw[0], target_hw[1], original_shape[-1])
+        else:
+            return resized_array.reshape(B, T, target_hw[0], target_hw[1])
 
 

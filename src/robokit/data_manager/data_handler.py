@@ -345,8 +345,9 @@ class ActionAsVideoSaver:
         self.lines = {}
         self.current_frame = 0
 
-    def add_action(self, action: np.ndarray):
+    def add_action(self, action_D: np.ndarray):
         """向队列中添加一个7维动作"""
+        action = action_D
         action = np.array(action)
         assert action.shape == (7,), f"Action must be 7-dimensional, got shape {action.shape}"
         self.action_queue.append(action.copy())

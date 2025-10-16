@@ -1,4 +1,5 @@
 import argparse
+import traceback
 
 import roslibpy
 
@@ -30,14 +31,23 @@ def main(opts):
     print('Verifying the ROS target is connected?', client.is_connected)
     robot_client = RobotClient(client)
 
+    if opts.port > 0:
+        test_url = f"http://localhost:{opts.port}"
+    elif opts.port == 0:
+        test_url = "http://g7-debug.hkueai.org"
+    else:
+        raise Exception("Port number should be non-negative.")
+
     print("[Info] Using task:", task_instructions[opts.task])
-    gpu_connector = ServiceConnector(base_url=f"http://g7-debug.hkueai.org:{opts.port}")
+    gpu_connector = ServiceConnector(base_url=test_url)
     evaluator = RealWorldEvaluator(
         gpu_service_connector=gpu_connector,
         robot=robot_client,
         cur_task_text=task_instructions[opts.task],
         run_loops=5000,
-        img_hw=(480, 848),  # (480, 848)
+        img_hw=(480, 848),  # ori:(480, 848)
+        resize_hw=(128, 160),  # ori:(128, 160)
+        buffer_size=5,  # ori:1
         enable_auto_ae_wb=True,
         fps=30,
         speed_scale=1.,
@@ -46,7 +56,7 @@ def main(opts):
     try:
         evaluator.run()
     except Exception as e:
-        print(e)
+        traceback.print_exc()
     except KeyboardInterrupt:
         print("用户按下 Ctrl+C，程序中断。")
     finally:

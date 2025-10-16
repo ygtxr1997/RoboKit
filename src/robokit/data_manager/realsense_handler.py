@@ -45,6 +45,8 @@ class RealsenseHandler(object):
             if d.get_info(rs.camera_info.name).lower() != 'platform camera':
                 connect_devices.append(d.get_info(rs.camera_info.serial_number))
         print("[RealsenseHandler] connected devices:", connect_devices)
+        if len(connect_devices) == 0:
+            raise Exception("No Realsense device connected!")
 
         # Sort camera according to CAMERA_INDICES
         connect_devices = sorted(connect_devices, key=lambda x: self.CAMERA_INDICES[x]['index'])
