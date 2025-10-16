@@ -1,21 +1,15 @@
 import numpy as np
-import time
 
-import roslibpy
-
-
-import roslibpy
 import roslibpy.actionlib
-from tqdm import tqdm
 import time
 
-from transforms3d.quaternions import qmult, qconjugate, qnorm, qinverse
-from transforms3d.quaternions import qmult, qconjugate, qnorm, mat2quat, quat2mat
-from transforms3d.euler import quat2euler, euler2mat, mat2euler, euler2quat
+from transforms3d.quaternions import qinverse
+from transforms3d.quaternions import qmult, qconjugate, qnorm, mat2quat
+from transforms3d.euler import quat2euler
 
-# from robokit.network.robot_client_piper import RobotClientPiper
-from robokit.network.robot_client import RobotClient
-from robokit.network.vr_handler import QuestHandler
+# from robokit.robots.robot_client_piper import RobotClientPiper
+from robokit.robots.robot_client_inovo import RobotClient
+from robokit.controllers.vr_control import QuestHandler
 
 
 client = roslibpy.Ros(host='192.168.1.7', port=9090) # [TCL] Change host to the IP of the robot

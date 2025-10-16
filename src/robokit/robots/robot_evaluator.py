@@ -5,15 +5,15 @@ from tqdm import tqdm
 import numpy as np
 from PIL import Image
 
-from robokit.service.service_connector import ServiceConnector
-from robokit.network.robot_client import RobotClient
-from robokit.data.realsense_handler import RealsenseHandler
-from robokit.data.data_handler import DataHandler, ImageAsVideoSaver, ActionAsVideoSaver
+from robokit.connects.service_connector import ServiceConnector
+from robokit.robots.robot_client_inovo import RobotClient
+from robokit.data_manager.realsense_handler import RealsenseHandler
+from robokit.data_manager.data_handler import DataHandler, ImageAsVideoSaver, ActionAsVideoSaver
 from robokit.debug_utils.images import concatenate_rgb_images
 
 
 class RealWorldEvaluator:
-    """ Run on Robot arm local network. """
+    """ Run on Robot arm local robots. """
     def __init__(self,
                  gpu_service_connector: ServiceConnector,
                  robot: RobotClient,
@@ -219,7 +219,7 @@ class RealWorldEvaluator:
             else:
                 pass
 
-            time.sleep(1. / 120)  # Env FPS, like pygame data collection
+            time.sleep(1. / 120)  # Env FPS, like pygame data_manager collection
 
         self.show_time_delays()
         return 0.

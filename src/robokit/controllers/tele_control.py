@@ -2,15 +2,16 @@ import os
 import time
 from datetime import datetime
 import enum
-from typing import Dict, List, Tuple
-from abc import ABC, abstractmethod
+from typing import Dict, List
+from abc import abstractmethod
 import pygame
 import numpy as np
 
-from .robot_client import RobotClient
-from robokit.network.imu_control import RawIMUHandler
-from robokit.data.data_handler import ForkedDataSaver
-from robokit.data.realsense_handler import RealsenseHandler
+from robokit.robots.robot_client_inovo import RobotClient
+from robokit.controllers.imu_control import RawIMUHandler
+from robokit.data_manager.data_handler import ForkedDataSaver
+from robokit.data_manager.realsense_handler import RealsenseHandler
+from robokit.data_manager.ft300_handler import FT300Handler
 
 
 class GameState(enum.Enum):
@@ -47,7 +48,7 @@ class BaseController:
         self.z_39 = 0.  # left-right axis of z, only used by angular jog move
         self.g = 0.  # 0:open, 1:close
 
-        # Open gripper service
+        # Open gripper connects
         # self.robot.arm_power_on()
         # self.robot.robot_arm_enable()
         # self.robot.robot_gripper_enable()
@@ -73,6 +74,11 @@ class BaseController:
             for ae_wb_param in self.ae_wb_params:
                 self.camera.set_ae_wb(**ae_wb_param)
 
+        self.ftsensor = FT300Handler()
+        if not self.ftsensor.connect():
+            print("Failed to connect force torque sensor")
+            exit()
+
         # Data saving
         self.data_manager = ForkedDataSaver(num_workers=saving_workers)
         self.need_saving = False
@@ -88,6 +94,7 @@ class BaseController:
         return formatted_time
 
     def start(self):
+        # print()
         self.game_state = GameState.RUNNING
         toggle_flag = False
         last_game_time = pygame.time.get_ticks()
@@ -184,20 +191,29 @@ class BaseController:
                         end_episode_pressed = False
                         self.on_end_episode()
 
-                # Save data
+                # Save data_manager
                 if self.need_saving:
                     assert self.saving_dir is not None
                     os.makedirs(self.saving_dir, exist_ok=True)
 
                     start_time = pygame.time.get_ticks()
                     camera_data = self.camera.capture_frames()
-                    # print("[DEBUG] Get camera data cost:", pygame.time.get_ticks() - start_time)
+                    # print("[DEBUG] Get camera data_manager cost:", pygame.time.get_ticks() - start_time)
+                    ft_data = self.ftsensor.read_ft()
+                    if ft_data:
+                        # Display in same format as driverSensor
+                        # print(f"[DEBUG] ( {ft_data[0]:.2f} , {ft_data[1]:.2f} , {ft_data[2]:.2f} , "
+                        #       f"{ft_data[3]:.3f} , {ft_data[4]:.3f} , {ft_data[5]:.3f} )")
+                        pass
+                    else:
+                        print("No force torque data_manager.")
+
                     task_instruction = self.task_instruction  # "pick up the banana"
                     start_time = pygame.time.get_ticks()
                     robot_data = self.robot.get_current_frame_info()
-                    # print("[DEBUG] Get robot data cost:", pygame.time.get_ticks() - start_time)
+                    # print("[DEBUG] Get robot data_manager cost:", pygame.time.get_ticks() - start_time)
 
-                    # # Note: if not set linear_jog to zero, will save wrong data
+                    # # Note: if not set linear_jog to zero, will save wrong data_manager
                     # zero_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
                     # if self.is_linear_jog_pressed():
                     #     robot_data['jog_angular'] = zero_xyz
@@ -233,23 +249,33 @@ class BaseController:
                         robot_data['joint_states'][5],
                         robot_data['gripper_moving_to'],
                     ])
+                    frame_force_torque = np.array([
+                        ft_data[0],
+                        ft_data[1],
+                        ft_data[2],
+                        ft_data[3],
+                        ft_data[4],
+                        ft_data[5],
+                    ])
 
                     frame_data_dict = {
-                        "primary_rgb": camera_data['color2'],
-                        "gripper_rgb": camera_data['color1'],
-                        "primary_depth": camera_data['depth2'],
-                        "gripper_depth": camera_data['depth1'],
+                        "primary_rgb": camera_data['color1'],
+                        "gripper_rgb": camera_data['color2'],
+                        "primary_depth": camera_data['depth1'],
+                        "gripper_depth": camera_data['depth2'],
                         "language_text": task_instruction,
                         "actions": frame_actions,
                         "rel_actions": frame_rel_actions,
                         "robot_obs": frame_robot_obs,
+                        "force_torque": frame_force_torque,
                     }
 
                     save_fn = f"{self.saving_frame_idx:06d}.npz"  # data_manager will handle the filename
                     save_path = os.path.join(self.saving_dir, save_fn)
                     self.data_manager.submit(frame_data_dict, self.saving_dir, file_path=None)
+                    # self.data_manager.submit(frame_data_dict, self.saving_dir, file_path=save_path)
                     start_time = pygame.time.get_ticks()
-                    # print("[DEBUG] Saving data cost:", pygame.time.get_ticks() - start_time)
+                    # print("[DEBUG] Saving data_manager cost:", pygame.time.get_ticks() - start_time)
                     # print("---" * 30)
                     self.saving_frame_idx += 1
 
@@ -367,7 +393,7 @@ class BaseController:
         print("[tele_control] Episode Ended")
         self.on_rumble()
         time.sleep(0.1)
-        print(f"[tele_control] Waiting for saving last data in queue, cur_idx={self.saving_episode_idx}")
+        print(f"[tele_control] Waiting for saving last data_manager in queue, cur_idx={self.saving_episode_idx}")
         self.data_manager.save_remaining()
         # self.on_back_home()
 
@@ -587,9 +613,11 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         self.angular_scale = .4
 
     def update_xyz(self):
+
         x = -self.get_joy_axis(0)
         y = self.get_joy_axis(1)
         z = -self.get_joy_axis(4)
+        # print("DEBUG|| xyz," + str(x) + "," + str(y) + "," + str(z))
         self.linear_xyz = {'x': x, 'y': y, 'z': z}
 
     def on_angular_jog(self, xyz: dict = None, z_39: float = None) -> None:
@@ -611,6 +639,7 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         scaled_xyz['y'] = -self.angular_xyz['x']
         scaled_xyz['z'] = scaled_xyz['z'] if abs(scaled_xyz['z']) > abs(self.z_39) else self.z_39
         scaled_xyz = {k: v * self.angular_scale for k, v in scaled_xyz.items()}
+        # print("DEBUG|| scaled_xyz," + str(scaled_xyz))
 
         # for k, v in linear_scaled_xyz.items():
         #     if np.random.uniform() > 0.9:

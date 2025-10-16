@@ -1,7 +1,6 @@
-import numpy as np
 import copy
 
-from robokit.network.imu_control import RawIMUHandler
+from robokit.controllers.imu_control import RawIMUHandler
 from robokit.debug_utils.images import DynamicDataDrawer
 
 """

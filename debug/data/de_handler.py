@@ -1,6 +1,6 @@
 import numpy as np
 
-from robokit.data import DataHandler
+from robokit.data_manager import DataHandler
 
 
 """
@@ -28,7 +28,7 @@ data_dict = {
 }
 
 # 创建一个 DataHandler 实例
-file_path = 'data.npz'
+file_path = 'data_manager.npz'
 handler = DataHandler(data_dict)
 
 # 保存数据

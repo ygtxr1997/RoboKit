@@ -8,7 +8,7 @@ from PIL import Image
 from io import BytesIO
 from torch.utils.data import DataLoader, Dataset
 
-from robokit.data.data_handler import DataHandler
+from robokit.data_manager.data_handler import DataHandler
 
 
 class TCLDataset(Dataset):
@@ -42,7 +42,7 @@ class TCLDataset(Dataset):
 
         if load_keys is None:
             load_keys = ["primary_rgb", "gripper_rgb", "primary_depth", "gripper_depth",
-                         "language_text", "actions", "rel_actions", "robot_obs"]
+                         "language_text", "actions", "rel_actions", "robot_obs", "force_torque"]
         self.load_keys = load_keys
 
         print("[TCLDataset] total length:", self.total_length)
@@ -368,7 +368,7 @@ class TCLDatasetHDF5(TCLDataset):
         self.dsets = {}
         if os.path.exists(self.h5_path) and use_h5:
             self._load_hdf5_file()
-            print("[TCLDatasetHDF5] using h5 data:", self.h5_path, ". total_len:", self.total_length)
+            print("[TCLDatasetHDF5] using h5 data_manager:", self.h5_path, ". total_len:", self.total_length)
 
     @staticmethod
     def _extract_image_bytes(raw):
@@ -429,7 +429,7 @@ class TCLDatasetHDF5(TCLDataset):
         :param num_workers: 使用的工作进程数量
         :param pin_memory: 是否启用内存锁定
         """
-        print(f"[TCLDatasetHDF5] Saving data to HDF5 at {self.h5_path}")
+        print(f"[TCLDatasetHDF5] Saving data_manager to HDF5 at {self.h5_path}")
         os.makedirs(os.path.dirname(self.h5_path), exist_ok=True)
 
         # 1. 从第一个样本推断每个字段的 dtype 和 shape
@@ -558,7 +558,7 @@ class TCLDatasetHDF5(TCLDataset):
 if __name__ == "__main__":
     data_root = "/home/geyuan/local_soft/TCL/collected_data_0507"
 
-    # 1. Load data
+    # 1. Load data_manager
     dataset = TCLDataset(data_root, use_extracted=False)
     dataset.__getitem__(0)
     # dataset.total_length = 100  # For debug
@@ -570,8 +570,8 @@ if __name__ == "__main__":
     meta_info = dataset.load_statistics_from_json(json_path=statistics_json_path)
     print(meta_info)
 
-    # 3. Extract data by key
-    print("Extract data by key")
+    # 3. Extract data_manager by key
+    print("Extract data_manager by key")
     dataset.save_to_npy_by_key("rel_actions")
     dataset.load_npy_by_key("rel_actions")
     print(dataset.extracted_data['rel_actions'][23])

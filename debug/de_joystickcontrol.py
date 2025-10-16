@@ -1,9 +1,7 @@
-import time
-
 import roslibpy
 
-from robokit.network.robot_client import RobotClient
-from robokit.network.tele_control import PS5DualSenseIMUController
+from robokit.robots.robot_client_inovo import RobotClient
+from robokit.controllers.tele_control import PS5DualSenseIMUController
 
 
 robot_ip = '192.168.1.7'

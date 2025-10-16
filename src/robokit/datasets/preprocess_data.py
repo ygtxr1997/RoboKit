@@ -1,6 +1,6 @@
 import argparse
 from robokit.debug_utils.printer import print_batch
-from robokit.data.tcl_datasets import TCLDataset, TCLDatasetHDF5
+from robokit.datasets.tcl_datasets import TCLDataset, TCLDatasetHDF5
 
 
 def main(opts):
@@ -15,7 +15,7 @@ def preprocess(opts):
     batch_size = opts.batch_size
     num_workers = opts.num_workers
 
-    # 1. Load data
+    # 1. Load data_manager
     dataset = TCLDataset(data_root, use_extracted=False)
     dataset.__getitem__(0)
     # dataset.total_length = 100  # For debug
@@ -36,8 +36,8 @@ def preprocess(opts):
     meta_info = dataset.load_statistics_from_json(json_path=statistics_json_path)
     print(meta_info)
 
-    # 3. Extract data by key
-    # print("Extract data by key")
+    # 3. Extract data_manager by key
+    # print("Extract data_manager by key")
     # dataset.save_to_npy_by_key(
     #     "rel_actions", batch_size=batch_size, num_workers=num_workers)
     dataset.load_npy_by_key("rel_actions")
@@ -90,14 +90,14 @@ if __name__ == "__main__":
     Example usage:
     Op1. Extract keys and statistics
     python scripts/01_preprocess_data.py  \
-        -R "/home/geyuan/local_soft/TCL/0709_coffee_source"
-    
+        -R "/home/geyuan/local_soft/TCL/1009_spoon_pick_place"
+
     Op2. Convert to HDF5
     python scripts/01_preprocess_data.py  \
-        -R "/home/geyuan/local_soft/TCL/0627_pot_source"  \
-        --as_hdf5 "/home/geyuan/local_soft/TCL/hdf5/0627_pot_source_240p.h5"
+        -R "/home/geyuan/local_soft/TCL/1009_spoon_pick_place"  \
+        --as_hdf5 "/home/geyuan/local_soft/TCL/hdf5/1009_spoon_pick_place_240p.h5"
     """
-    args = argparse.ArgumentParser("Test data format")
+    args = argparse.ArgumentParser("Test data_manager format")
     args.add_argument("-R", "--root", required=True, type=str, help="Root folder path")
     args.add_argument("-i", "--check_index", default=23, type=int, help="Index for checking")
     args.add_argument("--as_hdf5", default="", type=str, help="(Optional) saving HDF5 file path")

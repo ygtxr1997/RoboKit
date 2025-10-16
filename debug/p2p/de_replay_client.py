@@ -1,8 +1,8 @@
 import roslibpy
 
-from robokit.service.service_connector import ServiceConnector
+from robokit.connects.service_connector import ServiceConnector
 from robokit.debug_utils.debug_classes import ReplayEvaluator
-from robokit.network.robot_client import RobotClient
+from robokit.robots.robot_client_inovo import RobotClient
 
 
 robot_ip = '192.168.1.7'

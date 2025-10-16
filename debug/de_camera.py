@@ -4,7 +4,7 @@ from PIL import Image
 from tqdm import tqdm
 import json
 
-from robokit.data import RealsenseHandler
+from robokit.data_manager import RealsenseHandler
 
 
 rs_handler = RealsenseHandler()

@@ -2,7 +2,7 @@ import time
 
 import roslibpy
 
-from robokit.network import RobotClient
+from robokit.robots.robot_client_inovo import RobotClient
 
 
 robot_ip = '192.168.1.7'

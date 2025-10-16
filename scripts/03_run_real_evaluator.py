@@ -2,9 +2,9 @@ import argparse
 
 import roslibpy
 
-from robokit.service.service_connector import ServiceConnector
-from robokit.network.robot_evaluator import RealWorldEvaluator
-from robokit.network.robot_client import RobotClient
+from robokit.connects.service_connector import ServiceConnector
+from robokit.robots.robot_evaluator import RealWorldEvaluator
+from robokit.robots.robot_client_inovo import RobotClient
 
 
 task_instructions = [
@@ -17,6 +17,8 @@ task_instructions = [
     # [3] Coffee
     "use a spoon to scoop one spoonful of coffee beans from the source cup, "
     "then pour the beans into the target cup.",
+    # [4] Spoon
+    "Pick up the spoon in the cup, and then place the spoon into a bowl.",
 ]
 
 
@@ -29,7 +31,7 @@ def main(opts):
     robot_client = RobotClient(client)
 
     print("[Info] Using task:", task_instructions[opts.task])
-    gpu_connector = ServiceConnector(base_url=f"http://localhost:{opts.port}")
+    gpu_connector = ServiceConnector(base_url=f"http://g7-debug.hkueai.org:{opts.port}")
     evaluator = RealWorldEvaluator(
         gpu_service_connector=gpu_connector,
         robot=robot_client,
@@ -60,7 +62,7 @@ if __name__ == "__main__":
     args = argparse.ArgumentParser("03 Run Real Evaluator")
     # debug: 6060
     # zhihao: 6260
-    args.add_argument("-p", "--port", default=5880, type=int, help="Port number of GPU service")
+    args.add_argument("-p", "--port", default=5880, type=int, help="Port number of GPU connects")
     args.add_argument("-t", "--task", default=-1, type=int, help="Index of task")
     args.add_argument("-a", "--action_save_flag", default=False, action="store_true", help="Action save flag")
     args = args.parse_args()

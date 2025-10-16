@@ -113,6 +113,7 @@ class DataHandler:
             "actions": np.ndarray,
             "rel_actions": np.ndarray,
             "robot_obs": np.ndarray,
+            "force_torque": np.ndarray,
         }
         if 'language_text' in data_dict.keys() and isinstance(data_dict['language_text'], str):
             data_dict['language_text'] = np.array(data_dict['language_text'])
@@ -136,6 +137,8 @@ class DataHandler:
                     pass  # 对应机器人观测数据
                 elif data_dict[key].shape == () and key in ["language_text"]:
                     pass  # Language task description
+                elif data_dict[key].shape == (6,) and key in ["force_torque"]:
+                    pass  # force and torque
                 else:
                     print(f"项 {key} 的形状不匹配！")
                     return False
@@ -226,7 +229,7 @@ class ForkedDataSaver:
             remaining = self.queue.qsize()
             if remaining == 0:
                 if verbose:
-                    print("[ForkedDataSaver] Queue fully processed. No remaining data.")
+                    print("[ForkedDataSaver] Queue fully processed. No remaining data_manager.")
                 break
             if verbose:
                 print(f"[ForkedDataSaver] Waiting... {remaining} item(s) remaining in queue.")

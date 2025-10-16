@@ -181,7 +181,7 @@ class RawIMUHandler:
         self._acquire_euler_evt = mp.Event()
         self._euler_arr = mp.Array('d', 6)  # 共享欧拉角（rpy_real, rpy_rel）
         self._quat_arr = mp.Array('d', 4)  # 共享四元数（q_real）
-        self._imu_arr = mp.Array('d', 6)  # shared IMU data (6 doubles)
+        self._imu_arr = mp.Array('d', 6)  # shared IMU data_manager (6 doubles)
         self._lock = mp.Lock()
         self._running = mp.Value('b', True)  # 控制子进程运行状态
         self._process = mp.Process(target=self._imu_loop, args=(

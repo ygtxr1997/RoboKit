@@ -4,10 +4,10 @@ from typing import List
 import numpy as np
 from PIL import Image
 
-from robokit.service.service_connector import ServiceConnector
-from robokit.network.robot_client import RobotClient
-from robokit.data.realsense_handler import RealsenseHandler
-from robokit.data.data_handler import DataHandler
+from robokit.connects.service_connector import ServiceConnector
+from robokit.robots.robot_client_inovo import RobotClient
+from robokit.data_manager.realsense_handler import RealsenseHandler
+from robokit.data_manager.data_handler import DataHandler
 
 
 class DebugModel:
@@ -98,7 +98,7 @@ class ReplayModel:
 
 
 class DebugEvaluator:
-    """ Run on Robot arm local network. """
+    """ Run on Robot arm local robots. """
     def __init__(self,
                  gpu_service_connector: ServiceConnector,
                  run_loops: int = 100,
@@ -132,7 +132,8 @@ class DebugEvaluator:
 
     def run(self) -> float:
         cur_task_text = "DEBUG"
-        self.connector.reset(cur_task_text)
+        self.connector.send_reset(cur_task_text)
+        self.connector.send_reset(cur_task_text)
 
         for i in range(self.run_loops):
             self.time_tick()
@@ -140,19 +141,19 @@ class DebugEvaluator:
             if i % self.conduct_actions_per_step != 0:
                 pass  # skip model inference
             else:
-                cur_primary_rgb = np.random.randn(self.img_hw[0], self.img_hw[1], 3).astype(np.float32)
-                cur_gripper_rgb = np.random.randn(self.img_hw[0], self.img_hw[1], 3).astype(np.float32)
+                cur_primary_rgb = np.random.randn(1, 5, self.img_hw[0], self.img_hw[1], 3).astype(np.float32)
+                cur_gripper_rgb = np.random.randn(1, 5, self.img_hw[0], self.img_hw[1], 3).astype(np.float32)
 
                 cur_primary_rgb = (cur_primary_rgb * 255).astype(np.uint8)
                 cur_gripper_rgb = (cur_gripper_rgb * 255).astype(np.uint8)
                 cur_joint_states = np.random.randn(6).astype(np.float32).tolist()
-                actions = self.connector.step(
-                    primary_rgb=cur_primary_rgb,
+                actions = self.connector.send_obs_and_get_action(
+                    primary_rgb=cur_primary_rgb,  # (B,T,H,W,C) uint8
                     gripper_rgb=cur_gripper_rgb,
                     task_description=cur_task_text,
                     joint_states=cur_joint_states
                 )
-                assert actions.shape[1] >= 6
+                assert actions.shape[-1] >= 6
                 pass  # conduct actions in real-world environment
 
             time.sleep(0.01)  # Robot arm conducting delay
@@ -164,7 +165,7 @@ class DebugEvaluator:
 
 
 class ReplayEvaluator:
-    """ Run on Robot arm local network. """
+    """ Run on Robot arm local robots. """
     def __init__(self,
                  gpu_service_connector: ServiceConnector,
                  robot: RobotClient,
@@ -246,7 +247,7 @@ class ReplayEvaluator:
             else:
                 pass
 
-            time.sleep(1. / 120)  # Env FPS, like pygame data collection
+            time.sleep(1. / 120)  # Env FPS, like pygame data_manager collection
 
         self.show_time_delays()
         return 0.

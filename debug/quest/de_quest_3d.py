@@ -7,14 +7,12 @@ from OpenGL.GLU import *
 import numpy as np
 import transforms3d
 import transforms3d.quaternions as quat
-from transforms3d.euler import quat2euler, mat2euler, euler2quat
-from transforms3d.quaternions import qmult, qinverse, quat2mat, axangle2quat
 
 # 如果没有这个模块，注释掉这行
 try:
-    from robokit.network.vr_handler import QuestHandler
+    from robokit.controllers.vr_control import QuestHandler
 except ImportError:
-    print("QuestHandler not available, using dummy data")
+    print("QuestHandler not available, using dummy data_manager")
     class QuestHandler:
         def __init__(self):
             self.q_now = [1, 0, 0, 0]

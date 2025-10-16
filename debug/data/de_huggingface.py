@@ -16,7 +16,13 @@ upload_fns = [
 
     # "0709_coffee_source.zip",
 
-    "0718_many_rand.zip"
+    # "0718_many_rand.zip"
+
+    # "1009_spoon_pick_place.zip"
+
+    "1010_sweep_bean.zip",
+    "1010_pour_bean.zip",
+    "1010_wipe_white_board.zip"
 ]
 
 for upload_fn in upload_fns:

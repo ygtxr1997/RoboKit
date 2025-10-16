@@ -425,7 +425,7 @@ class RobotClient:
         }
         trajectory_goals = [trajectory_goal_settings]
 
-        # service = roslibpy.Service(self._ros, '/robot/switch_controller', 'inovo_driver/SwitchControllerGroup')
+        # connects = roslibpy.Service(self._ros, '/robot/switch_controller', 'inovo_driver/SwitchControllerGroup')
         request = roslibpy.ServiceRequest({'name': 'trajectory'})
         result = self.switch_service.call(request)
         # print('Service response: {}'.format(result))
@@ -467,7 +467,7 @@ class RobotClient:
         }
         goal_info = [motion_goal_settings]
 
-        # service = roslibpy.Service(
+        # connects = roslibpy.Service(
         #     self._ros, '/robot/switch_controller', 'inovo_driver/SwitchControllerGroup')
         request = roslibpy.ServiceRequest({'name': 'trajectory'})
         result = self.switch_service.call(request)

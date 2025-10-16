@@ -1,9 +1,7 @@
-import time
-
 import roslibpy
 
-from robokit.network.robot_client import RobotClient
-from robokit.network.tele_control import PS5DualSenseIMUController
+from robokit.robots.robot_client_inovo import RobotClient
+from robokit.controllers.tele_control import PS5DualSenseIMUController
 
 
 robot_ip = '192.168.1.7'
@@ -25,14 +23,31 @@ env_light_params = {
     }],
 }
 
-### Params for data collector ###
+### Params for data_manager collector ###
+
+''' Spoon '''
+# saving_root = "/home/geyuan/local_soft/TCL/1009_spoon_pick_place/"
+# task_instruction = "Pick up the spoon in the cup, and then place the spoon into a bowl."
+
+''' Sweep 18beans '''
+# saving_root = "/home/geyuan/local_soft/TCL/1010_sweep_bean/"
+# task_instruction = "Pick up the broom and sweep the coffee beans on the table into the dustpan."
+#
+''' Pour 100beans '''
+# saving_root = "/home/geyuan/local_soft/TCL/1010_pour_bean/"
+# task_instruction = "Pick up the cup and pour the coffee bean into a plate."
+#
+''' Wipe '''
+saving_root = "/home/geyuan/local_soft/TCL/1010_wipe_white_board/"
+task_instruction = "Wiping the writing on the whiteboard."
+
 ''' Pot '''
-saving_root = "/home/geyuan/local_soft/TCL/0627_pot_source/"
 # saving_root = "/home/geyuan/local_soft/TCL/0627_pot_light_rand/"
 # saving_root = "/home/geyuan/local_soft/TCL/0627_pot_object_rand/"
 # saving_root = "/home/geyuan/local_soft/TCL/0627_pot_table_rand/"
 # saving_root = "/home/geyuan/local_soft/TCL/0627_pot_distractor_rand/"
-task_instruction = "put the egg into the pot, then move the pot onto the stove"
+# task_instruction = "put the egg into the pot, then move the pot onto the stove"
+
 ''' Pepper '''
 # saving_root = "/home/geyuan/local_soft/TCL/0704_pepper_source/"
 # saving_root = "/home/geyuan/local_soft/TCL/0704_pepper_light_rand/"

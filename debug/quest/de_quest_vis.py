@@ -1,7 +1,4 @@
-import numpy as np
-import copy
-
-from robokit.network.vr_handler import QuestHandler
+from robokit.controllers.vr_control import QuestHandler
 from robokit.debug_utils.images import DynamicDataDrawer
 
 

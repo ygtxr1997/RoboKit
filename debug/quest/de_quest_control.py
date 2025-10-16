@@ -1,19 +1,12 @@
 import numpy as np
-import time
 
-import roslibpy
-
-
-import roslibpy
 import roslibpy.actionlib
-from tqdm import tqdm
 import time
 
-from transforms3d.quaternions import qmult, qconjugate, qnorm
 from transforms3d.quaternions import qmult, qconjugate, qnorm, mat2quat
 
-from robokit.network.robot_client_piper import RobotClientPiper
-from robokit.network.vr_handler import QuestHandler
+from robokit.robots.robot_client_piper import RobotClientPiper
+from robokit.controllers.vr_control import QuestHandler
 
 
 client = roslibpy.Ros(host='192.168.5.242', port=9090) # [Piper] Change host to the IP of the robot

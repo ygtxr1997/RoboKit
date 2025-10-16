@@ -1,5 +1,5 @@
 import time
-from robokit.network.vr_handler import OculusReader, QuestHandler
+from robokit.controllers.vr_control import QuestHandler
 
 
 # # Op1. OculusReader

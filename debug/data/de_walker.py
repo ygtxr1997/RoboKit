@@ -1,11 +1,9 @@
 import os
 import numpy as np
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 
-from robokit.data.tcl_datasets import TCLDataset
-from robokit.data.data_handler import DataHandler
+from robokit.data_manager.data_handler import DataHandler
 from robokit.debug_utils.printer import print_batch
-from robokit.debug_utils.io import dataloader_speed_test
 
 
 class DeTCLDataset(Dataset):
@@ -38,11 +36,11 @@ class DeTCLDataset(Dataset):
 
     def load_single_episode(self, ep_path: str):
         # with np.load(ep_path, allow_pickle=True) as f:
-        #     data = dict(f)
+        #     data_manager = dict(f)
 
         data = DataHandler.load(file_path=ep_path)
         primary_rgb = data.data_dict['primary_rgb']
-        print_batch('data', data.data_dict)
+        print_batch('data_manager', data.data_dict)
 
     def __len__(self):
         return self.total_length
@@ -51,7 +49,6 @@ class DeTCLDataset(Dataset):
 from PIL import Image
 from io import BytesIO
 if __name__ == "__main__":
-    from robokit.data.tcl_datasets import TCLDatasetHDF5
     h5_path = "/home/geyuan/local_soft/TCL/hdf5/collected_data_0507.h5"
     keys_config = {
         "primary_rgb": "rgb",
@@ -70,7 +67,7 @@ if __name__ == "__main__":
     #     use_extracted=True,
     # )
     # sample = dataset.__getitem__(0)
-    # print_batch('data', sample)
+    # print_batch('data_manager', sample)
     #
     # dataset = TCLDataset(root="/home/geyuan/local_soft/TCL/memory/collected_data_0507")
 

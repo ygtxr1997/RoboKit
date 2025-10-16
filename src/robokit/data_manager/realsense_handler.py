@@ -12,6 +12,16 @@ import pyrealsense2 as rs
 
 
 class RealsenseHandler(object):
+    CAMERA_INDICES = {
+        '142422250072': {
+            'map_to': 'gripper',
+            'index': 1
+        },
+        '142422250069': {
+            'map_to': 'static',
+            'index': 0
+        }
+    }
     def __init__(self, img_width: int = 848, img_height: int = 480, frame_rate: int = 60, use_depth: bool = True):
         # 确定图像的输入分辨率与帧率
         self.img_width = img_width
@@ -36,6 +46,11 @@ class RealsenseHandler(object):
                 connect_devices.append(d.get_info(rs.camera_info.serial_number))
         print("[RealsenseHandler] connected devices:", connect_devices)
 
+        # Sort camera according to CAMERA_INDICES
+        connect_devices = sorted(connect_devices, key=lambda x: self.CAMERA_INDICES[x]['index'])
+        print("[RealsenseHandler] sorted connected devices:", connect_devices,
+              [self.CAMERA_INDICES[x] for x in connect_devices])
+
         pipeline_profiles = []
         pipelines = []
         for idx, connect_device in enumerate(connect_devices):
@@ -46,6 +61,7 @@ class RealsenseHandler(object):
 
             pipeline_profiles.append(pipeline_profile)
             pipelines.append(pipeline)
+            print("[DEBUG] Camera %d: %s" % (idx, connect_device))
 
         self.rs_config = rs_config
         self.connect_devices = connect_devices
@@ -102,7 +118,7 @@ class RealsenseHandler(object):
         # 保存 JSON 对象到文件
         with open('tmp_controls.json', 'w') as json_file:
             json.dump(as_json_object, json_file, indent=4)  # indent=4 用于格式化输出，便于阅读
-        print("JSON data has been saved to 'controls.json'.")
+        print("JSON data_manager has been saved to 'controls.json'.")
 
     def load_control_from_json(self):
         advnc_mode = self.get_advance_mode()
