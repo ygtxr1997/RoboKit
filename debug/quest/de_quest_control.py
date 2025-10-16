@@ -16,7 +16,7 @@ from robokit.network.robot_client_piper import RobotClientPiper
 from robokit.network.vr_handler import QuestHandler
 
 
-client = roslibpy.Ros(host='192.168.5.242', port=9090) # Change host to the IP of the robot
+client = roslibpy.Ros(host='192.168.5.243', port=9090) # Change host to the IP of the robot
 client.run()
 
 # Sanity check to see if we are connected
@@ -234,12 +234,12 @@ while True:
         continue
 
     now_xyz = np.array(now_xyz) - quest_zero_xyz
-    now_quat = calculate_relative_quat(now_quat, quest_zero_quat)
+    now_quat = calculate_relative_quat(now_quat, quest_zero_quat)  # quest relative rotation
 
     mapped_xyz = np.array([now_xyz[2], now_xyz[0], now_xyz[1]])  # z,x,y
     mapped_quat = map_quat_coordinate_system(now_quat)
 
-    xyz_offset = np.array([ 0.28231, 0.0, 0.229531])
+    xyz_offset = np.array([  0.274933, -0.030914, 0.255386])
     quat_offset = np.array([0,  0.8872565080156615, 0,  0.4612763694184371])
 
     mapped_xyz = xyz_offset + mapped_xyz * 0.5

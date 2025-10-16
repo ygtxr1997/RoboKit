@@ -3,7 +3,7 @@ import roslibpy.actionlib
 from tqdm import tqdm
 import time
 
-client = roslibpy.Ros(host='192.168.5.242', port=9090) # Change host to the IP of the robot
+client = roslibpy.Ros(host='192.168.5.243', port=9090) # Change host to the IP of the robot
 client.run()
 
 

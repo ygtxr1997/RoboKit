@@ -367,8 +367,8 @@ class TCLDatasetHDF5(TCLDataset):
         self.use_h5 = use_h5
         self.dsets = {}
         if os.path.exists(self.h5_path) and use_h5:
-            print("[TCLDatasetHDF5] using h5 data:", self.h5_path)
             self._load_hdf5_file()
+            print("[TCLDatasetHDF5] using h5 data:", self.h5_path, ". total_len:", self.total_length)
 
     @staticmethod
     def _extract_image_bytes(raw):
@@ -526,6 +526,7 @@ class TCLDatasetHDF5(TCLDataset):
         self.hf = h5py.File(self.h5_path, 'r')  # 这里打开文件并保留文件句柄
         for key in self.keys_config:
             self.dsets[key] = self.hf[key]
+            self.total_length = max(len(self.dsets[key]), self.total_length)  # modify total length
 
     def __getitem__(self, index: int):
         """根据索引从 HDF5 文件中读取数据"""

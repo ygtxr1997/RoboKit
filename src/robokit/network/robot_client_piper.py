@@ -347,15 +347,15 @@ class RobotClientPiper:
             linear_message['dx'],
             linear_message['dy'],
             linear_message['dz'],
-            # angular_message['qx'],
-            # angular_message['qy'],
-            # angular_message['qz'],
-            # angular_message['qw'],
+            angular_message['qx'],
+            angular_message['qy'],
+            angular_message['qz'],
+            angular_message['qw'],
             # -0.09079689034052749, 0.7663049838381912,
             # -0.02157924359457128, 0.6356625934370577
             # 0, 0.909457577059678,
             # 0, 0.41579672380712646,
-            0,  0.8872565080156615, 0,  0.4612763694184371
+            # 0,  0.8872565080156615, 0,  0.4612763694184371
         ]
         _message = {
             'joint_endpose': joint_endpose,
