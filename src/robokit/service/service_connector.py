@@ -1,6 +1,6 @@
 import base64
 import io
-from typing import Optional, Sequence
+from typing import Optional, Sequence, List
 import requests
 
 
@@ -71,6 +71,8 @@ class ServiceConnector:
             else:
                 assert isinstance(response["action"], Sequence), f"Not supported action: {type(response['action'])}"
                 raw_actions = np.array(response["action"])  # (H,7)
+                if raw_actions.ndim == 1:
+                    raw_actions = raw_actions[None]
 
             # assert raw_actions.shape[0] == self.send_per_frames
             self.cache_actions = raw_actions
@@ -93,7 +95,7 @@ class ServiceConnector:
         return ret_actions
 
     @staticmethod
-    def img_np_to_base64(image: np.ndarray) -> list[str]:
+    def img_np_to_base64(image: np.ndarray) -> List[str]:
         assert image.dtype == np.uint8
 
         def image_to_base64(img):

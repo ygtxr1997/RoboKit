@@ -8,7 +8,7 @@ from PIL import Image
 from robokit.service.service_connector import ServiceConnector
 from robokit.network.robot_client import RobotClient
 from robokit.data.realsense_handler import RealsenseHandler
-from robokit.data.data_handler import DataHandler, ImageAsVideoSaver
+from robokit.data.data_handler import DataHandler, ImageAsVideoSaver, ActionAsVideoSaver
 from robokit.debug_utils.images import concatenate_rgb_images
 
 
@@ -17,6 +17,7 @@ class RealWorldEvaluator:
     def __init__(self,
                  gpu_service_connector: ServiceConnector,
                  robot: RobotClient,
+                 cur_task_text: str,
                  run_loops: int = 100,
                  img_hw: tuple = (256, 256),
                  fps: int = 5,
@@ -26,9 +27,11 @@ class RealWorldEvaluator:
                  # Save as video
                  image_save_speedup: float = 2.0,
                  image_save_fn: str = "tmp_saved_video.mp4",
+                 action_save_flag: bool = False,
                  ):
         self.connector = gpu_service_connector
         self.robot = robot
+        self.cur_task_text = cur_task_text
         self.run_loops = run_loops
         self.img_hw = img_hw
         self.start_time = time.time()
@@ -66,6 +69,14 @@ class RealWorldEvaluator:
             height=img_hw[0],
             width=img_hw[1] * 2,
         )
+        self.action_save_flag = action_save_flag
+        self.action_save_fn = image_save_fn.replace('.mp4', '_action.mp4')
+        self.action_saver = ActionAsVideoSaver(
+            buffer_size=run_loops,
+            frame_rate=int(self.fps * self.image_save_speedup),
+            height=4.5,
+            width=6,
+        )
 
     def time_tick(self):
         self.start_time = time.time()
@@ -88,7 +99,7 @@ class RealWorldEvaluator:
 
         # cur_task_text = "pick up the banana"
         # cur_task_text = "pick up the shovel and put it into the cup"
-        cur_task_text = "put the egg into the pot, then move the pot onto the stove"
+        cur_task_text = self.cur_task_text
         buffer_size = self.buffer_size
         self.connector.reset(cur_task_text)
         self.reset()
@@ -171,7 +182,7 @@ class RealWorldEvaluator:
                 self.image_saver.add_image(saved_image)  # last is current
 
                 # 2. Send observation to GPU model, to get action
-                print(cur_primary_rgb[-1].shape)
+                # print(cur_primary_rgb[-1].shape)
                 action = self.connector.step(
                     primary_rgb=cur_primary_rgb,  # (T,H,W,C) to List[str]
                     gripper_rgb=cur_gripper_rgb,
@@ -179,9 +190,14 @@ class RealWorldEvaluator:
                     joint_state=cur_joint_state,  # [[0.] * 6] * T
                 )
                 assert action.shape[1] == 7, f"action.shape={action.shape} is not (:,7)"
-                print(self.step_cnt, action, cur_joint_state)
+                print("[Info]", self.step_cnt,
+                      self.format_array(action),
+                      self.format_array(np.array(cur_joint_state)),
+                      cur_task_text[:20],
+                )
 
-                # safe_min_z = 0.3
+                ## Slow down when the height is too low
+                # safe_min_z = 0.2
                 # print(cur_joint_state[-1][2], safe_min_z)
                 # if cur_joint_state[-1][2] <= safe_min_z:
                 #     for h in range(action.shape[0]):
@@ -195,6 +211,9 @@ class RealWorldEvaluator:
                 self.time_tok()
                 self.step_cnt += 1
 
+                # Save current action
+                self.action_saver.add_action(action[0, :])
+
                 if self.step_cnt >= self.run_loops:
                     break  # Finished
             else:
@@ -204,6 +223,10 @@ class RealWorldEvaluator:
 
         self.show_time_delays()
         return 0.
+
+    @staticmethod
+    def format_array(arr):
+        return np.array2string(arr, formatter={'float_kind': lambda x: f"{x:.6f}"})
 
     def capture_env_observation(self) -> dict:
         camera_data = self.camera.capture_frames()
@@ -271,17 +294,24 @@ class RealWorldEvaluator:
         self.robot.gripper_set_pub(self.g)
 
     def reset(self):
-        return
+        # return
         # Sanity check for gripper
         # self.robot.gripper_set_pub(1)
         # time.sleep(0.5)
-        # self.robot.gripper_set_pub(0)
-        # time.sleep(0.5)
+        self.robot.gripper_set_pub(0)
+        time.sleep(1.5)
 
         # Go back home
-        # self.robot.joint_back_home()
+        self.robot.joint_back_home()
 
     def stop(self):
-        self.image_saver.save_to_video(self.image_save_fn)
-        self.camera.stop()
+        ## Just for coffee task
+        # self.robot.gripper_set_pub(0)
+        # time.sleep(1.5)
+        # self.robot.joint_back_coffee()
+
         self.robot.stop()
+        self.camera.stop()
+        self.image_saver.save_to_video(self.image_save_fn)
+        if self.action_save_flag:
+            self.action_saver.save_to_video(self.action_save_fn)

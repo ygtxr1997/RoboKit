@@ -27,15 +27,26 @@ env_light_params = {
 
 ### Params for data collector ###
 ''' Pot '''
-# saving_root = "/home/geyuan/local_soft/TCL/0627_pot_source/"
-# saving_root = "/home/geyuan/local_soft/TCL/0627_pot_object/"
-# task_instruction = "put the egg into the pot, then move the pot onto the stove"
+saving_root = "/home/geyuan/local_soft/TCL/0627_pot_source/"
+# saving_root = "/home/geyuan/local_soft/TCL/0627_pot_light_rand/"
+# saving_root = "/home/geyuan/local_soft/TCL/0627_pot_object_rand/"
+# saving_root = "/home/geyuan/local_soft/TCL/0627_pot_table_rand/"
+# saving_root = "/home/geyuan/local_soft/TCL/0627_pot_distractor_rand/"
+task_instruction = "put the egg into the pot, then move the pot onto the stove"
 ''' Pepper '''
 # saving_root = "/home/geyuan/local_soft/TCL/0704_pepper_source/"
+# saving_root = "/home/geyuan/local_soft/TCL/0704_pepper_light_rand/"
+# saving_root = "/home/geyuan/local_soft/TCL/0704_pepper_object_rand/"
+# saving_root = "/home/geyuan/local_soft/TCL/0704_pepper_table_rand/"
+# saving_root = "/home/geyuan/local_soft/TCL/0704_pepper_distractor_rand/"
 # task_instruction = "orient the cup upright on its base and insert the chili pepper vertically into it."
 ''' Coffee '''
-saving_root = "/home/geyuan/local_soft/TCL/0709_coffee_source/"
-task_instruction = "use a spoon to scoop one spoonful of coffee beans from the source cup, then pour the beans into the target cup."
+# saving_root = "/home/geyuan/local_soft/TCL/0709_coffee_source/"
+# saving_root = "/home/geyuan/local_soft/TCL/0709_coffee_light_rand/"
+# saving_root = "/home/geyuan/local_soft/TCL/0709_coffee_object_rand/"
+# saving_root = "/home/geyuan/local_soft/TCL/0709_coffee_table_rand/"
+# saving_root = "/home/geyuan/local_soft/TCL/0709_coffee_distractor_rand/"
+# task_instruction = "use a spoon to scoop one spoonful of coffee beans from the source cup, then pour the beans into the target cup."
 
 env_params = env_source_params
 
@@ -45,6 +56,7 @@ controller = PS5DualSenseIMUController(
     saving_root=saving_root,
     task_instruction=task_instruction,
     saving_workers=6,
+    action_fps=30,  # ori:30, rand:60
     **env_params
 )
 

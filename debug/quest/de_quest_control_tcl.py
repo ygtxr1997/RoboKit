@@ -9,20 +9,22 @@ import roslibpy.actionlib
 from tqdm import tqdm
 import time
 
-from transforms3d.quaternions import qmult, qconjugate, qnorm
-from transforms3d.quaternions import qmult, qconjugate, qnorm, mat2quat
+from transforms3d.quaternions import qmult, qconjugate, qnorm, qinverse
+from transforms3d.quaternions import qmult, qconjugate, qnorm, mat2quat, quat2mat
+from transforms3d.euler import quat2euler, euler2mat, mat2euler, euler2quat
 
-from robokit.network.robot_client_piper import RobotClientPiper
+# from robokit.network.robot_client_piper import RobotClientPiper
+from robokit.network.robot_client import RobotClient
 from robokit.network.vr_handler import QuestHandler
 
 
-client = roslibpy.Ros(host='192.168.5.242', port=9090) # [Piper] Change host to the IP of the robot
+client = roslibpy.Ros(host='192.168.1.7', port=9090) # [TCL] Change host to the IP of the robot
 client.run()
 
 # Sanity check to see if we are connected
 print('Verifying the ROS target is connected?', client.is_connected)
 
-rc_piper = RobotClientPiper(client)
+rc_tcl = RobotClient(client)
 
 quest_handler = QuestHandler()
 time.sleep(0.5)
@@ -206,50 +208,85 @@ def map_quat_coordinate_system(now_quat, input_format='xyzw'):
         return mapped_quat_wxyz
 
 
-quest_zero_xyz = None
-quest_zero_quat = None
-while True:
-    # print(quest_handler.get_last_buttons())
 
-    # Check tele-op activated
-    # if not quest_handler.is_right_gripper_pressed() and not right_gripper_pressed:  # Do nothing
-    #     right_gripper_pressed = False
-    #     time.sleep(0.1)
-    #     continue
+def main():
+    quest_zero_xyz = None
+    quest_zero_quat = None
 
-    if not quest_handler.is_right_gripper_pressed():
-        time.sleep(0.03)
-        continue
+    quest_inner_quat = None
+    quest_inner_quat_last = None
+    quest_calc_quat = None
 
-    quest_latest_data = quest_handler.get_latest_euler()
-    now_xyz = quest_latest_data['now_xyz']
-    now_quat = quest_latest_data['quat']
-    # print('now_xyz', now_xyz)
+    last_right_gripper_pressed = False
+    while True:
+        # print(quest_handler.get_last_buttons())
 
-    # time.sleep(0.2)
+        # Check tele-op activated
+        # if not quest_handler.is_right_gripper_pressed() and not right_gripper_pressed:  # Do nothing
+        #     right_gripper_pressed = False
+        #     time.sleep(0.1)
+        #     continue
 
-    if quest_zero_xyz is None:
-        quest_zero_xyz = np.array(now_xyz)
-        quest_zero_quat = np.array(now_quat)
-        continue
+        time.sleep(1 / 25.0)
+        quest_latest_data = quest_handler.get_latest_euler()
+        now_xyz = quest_latest_data['now_xyz']
+        now_quat = quest_latest_data['now_quat']
 
-    now_xyz = np.array(now_xyz) - quest_zero_xyz
-    now_quat = calculate_relative_quat(now_quat, quest_zero_quat)
+        if not quest_handler.is_right_gripper_pressed() and not last_right_gripper_pressed:  # released state, do nothing
+            continue
+        elif quest_handler.is_right_gripper_pressed() and not last_right_gripper_pressed: # on press
+            print("[] On pressed")
+            quest_zero_xyz = np.array(now_xyz)
+            quest_zero_quat = np.array(now_quat)
 
-    mapped_xyz = np.array([now_xyz[2], now_xyz[0], now_xyz[1]])  # z,x,y
-    mapped_quat = map_quat_coordinate_system(now_quat)
+            quest_inner_quat_last = np.array(now_quat)
+            quest_calc_quat = np.array(now_quat)
 
-    xyz_offset = np.array([ 0.28231, 0.0, 0.229531])
-    quat_offset = np.array([0,  0.8872565080156615, 0,  0.4612763694184371])
+            last_right_gripper_pressed = True
+            continue
+        elif quest_handler.is_right_gripper_pressed() and last_right_gripper_pressed: # pressed state
+            pass  # will send message
+        else:  # on release
+            last_right_gripper_pressed = False
+            quest_zero_xyz = None
+            quest_zero_quat = None
+            print("[] On release")
+            continue
 
-    mapped_xyz = xyz_offset + mapped_xyz * 0.5
-    mapped_quat = calculate_next_quat(mapped_quat, quat_offset)
+        # mapped_euler = np.degrees(quat2euler(mapped_quat))
+        # mapped_euler = quest_latest_data['euler']
+        quest_calc_d_quat = qmult(quest_latest_data['now_quat'], qinverse(quest_inner_quat_last))
+        mapped_euler = np.degrees(quat2euler(quest_calc_d_quat, axes='sxyz'))
+        mapped_xyz = quest_latest_data['xyz'] * 20
 
-    # mapped_xyz = xyz_offset
-    linear_message = {'dx': mapped_xyz[0], 'dy': mapped_xyz[1], 'dz': mapped_xyz[2]}
-    angular_message = {'qx': mapped_quat[0], 'qy': mapped_quat[1], 'qz': mapped_quat[2], 'qw': mapped_quat[3]}
-    rc_piper.moveit_endpose_send(
-        linear_message,
-        angular_message=angular_message,
-    )
-    print(now_xyz, quest_zero_xyz)
+        linear_message = {'x': -mapped_xyz[2], 'y': -mapped_xyz[0], 'z': mapped_xyz[1]}
+        # angular_message = {'qx': mapped_quat[0], 'qy': mapped_quat[1], 'qz': mapped_quat[2], 'qw': mapped_quat[3]}
+        angular_message = {'x': -mapped_euler[2], 'y': -mapped_euler[0], 'z': mapped_euler[1]}
+        # rc_tcl.ang_jog_pub(
+        #     message=angular_message,
+        # )
+        # rc_tcl.linear_jog_pub(
+        #     message=linear_message,
+        # )
+        rc_tcl.lin_ang_jog_pub(
+            linear_message=linear_message,
+            angular_message=angular_message,
+        )
+        print("[euler]:", mapped_euler)
+        # print("[linear]:", linear_message)
+        # print("[pose]:", rc_tcl.Pose)
+
+        quest_inner_quat_last = quest_latest_data['now_quat']
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        print(e)
+    except KeyboardInterrupt:
+        print("用户按下 Ctrl+C，程序中断。")
+    finally:
+        rc_tcl.stop()
+
+    print("OK!")
