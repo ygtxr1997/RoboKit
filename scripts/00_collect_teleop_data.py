@@ -25,20 +25,20 @@ env_light_params = {
 
 ### Params for data_manager collector ###
 
-''' Spoon '''
-# saving_root = "/home/geyuan/local_soft/TCL/1009_spoon_pick_place/"
-# task_instruction = "Pick up the spoon in the cup, and then place the spoon into a bowl."
+''' pick and place wooden eggs '''
+# saving_root = "/home/geyuan/local_soft/TCL/1024_eggs_pick_place/"
+# task_instruction = "Pick up two eggs from a plate, and then place the eggs into a egg carton."
 
-''' Sweep 18beans '''
-# saving_root = "/home/geyuan/local_soft/TCL/1010_sweep_bean/"
+''' Sweep 20beans '''
+# saving_root = "/home/geyuan/local_soft/TCL/1024_sweep_bean/"
 # task_instruction = "Pick up the broom and sweep the coffee beans on the table into the dustpan."
 #
-''' Pour 100beans '''
-# saving_root = "/home/geyuan/local_soft/TCL/1010_pour_bean/"
-# task_instruction = "Pick up the cup and pour the coffee bean into a plate."
+''' Pour water '''
+# saving_root = "/home/geyuan/local_soft/TCL/1024_pour_water/"
+# task_instruction = "Pick up the measuring cup and pour the water into a glass."
 #
 ''' Wipe '''
-saving_root = "/home/geyuan/local_soft/TCL/1010_wipe_white_board/"
+saving_root = "/home/geyuan/local_soft/TCL/1024_wipe_white_board/"
 task_instruction = "Wiping the writing on the whiteboard."
 
 ''' Pot '''
@@ -71,7 +71,7 @@ controller = PS5DualSenseIMUController(
     saving_root=saving_root,
     task_instruction=task_instruction,
     saving_workers=6,
-    action_fps=30,  # ori:30, rand:60
+    action_fps=20, #15, #30,  # ori:30, rand:60
     **env_params
 )
 

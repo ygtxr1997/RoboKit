@@ -12,7 +12,7 @@ pip install -e .
 ## Remote control process on PS5 console
 ### 1. Check the realsense d455 camera with 
 ```shell
-realsens-viewer
+realsense-viewer
 ```
 ### 2. Initialize the FT300 sensor with
 ```shell
@@ -34,7 +34,8 @@ Keep the console still when starting to calibrate the IMU noise.
  - Triangle button to start recording.
  - Square button to stop recording.
  - Cross button to set the gripper to home position.
- - LB to activate the IMU controlling.
+ - LB to activate the xyz controlling with IMU.
+ - RB to activate the xyz controlling without IMU.
  - RT to close the gripper.
  - L joy stick to x-y plan move.
  - R joy stick to z axis move.

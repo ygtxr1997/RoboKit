@@ -8,6 +8,7 @@ import time
 import sys
 import serial
 import struct
+import numpy as np
 
 
 class FT300Handler:
@@ -17,10 +18,12 @@ class FT300Handler:
         self.port = f"{self.port_prefix}{self.port_id}"
         self.ser = None
         self.buffer = b''
+        self.offset = np.zeros(6)  # Added for drift/offset compensation
 
     def connect(self):
         for _ in range(5):
             if self._try_connect():
+                self.calibrate()  # Calibrate automatically upon successful connection
                 return True
 
     def _try_connect(self):
@@ -42,6 +45,25 @@ class FT300Handler:
             self.port = f"{self.port_prefix}{self.port_id}"
             return False
 
+    def calibrate(self, num_samples=10):
+        """
+        Read initial samples to determine the zero-offset (drift).
+        This should be called when the robot is stationary.
+        """
+        print("Calibrating FT300 sensor... Please do not move the robot.")
+        samples = []
+        while len(samples) < num_samples:
+            data = self.find_and_parse_packet(apply_offset=False)  # Read raw data
+            if data:
+                samples.append(data)
+            time.sleep(0.02)  # ~50Hz
+
+        if samples:
+            self.offset = np.mean(samples, axis=0)
+            print(f"Calibration complete. Offset set to: {self.offset}")
+        else:
+            print("Warning: Failed to collect samples for FT300 calibration. Offset remains zero.")
+
     def compute_crc(self, data):
         """Compute CRC-16 for Modbus RTU (same as in C code)"""
         crc = 0xFFFF
@@ -54,9 +76,9 @@ class FT300Handler:
                     crc >>= 1
         return crc
 
-    def find_and_parse_packet(self):
+    def find_and_parse_packet(self, apply_offset=True):
         """Find and parse a valid packet from the stream"""
-        # Read available data_manager
+        # Read available data
         new_data = self.ser.read(self.ser.in_waiting or 100)
         self.buffer += new_data
 
@@ -76,12 +98,12 @@ class FT300Handler:
                 self.buffer = self.buffer[-15:]
                 return None
 
-            # Check if we have enough data_manager for a complete message (14 bytes after header)
+            # Check if we have enough data for a complete message (14 bytes after header)
             if header_pos + 16 > len(self.buffer):
-                # Need more data_manager
+                # Need more data
                 return None
 
-            # Extract the message (header + 12 data_manager bytes + 2 CRC bytes)
+            # Extract the message (header + 12 data bytes + 2 CRC bytes)
             message = self.buffer[header_pos:header_pos + 16]
 
             # Verify CRC
@@ -93,7 +115,7 @@ class FT300Handler:
                 # Valid packet! Remove it from buffer
                 self.buffer = self.buffer[header_pos + 16:]
 
-                # Parse the data_manager (6 signed 16-bit values in little-endian)
+                # Parse the data (6 signed 16-bit values in little-endian)
                 values = []
                 for j in range(6):
                     byte_low = message[2 + 2 * j]
@@ -110,6 +132,10 @@ class FT300Handler:
                     else:
                         values.append(raw_value / 1000.0)
 
+                values = np.array(values)
+                if apply_offset:
+                    values -= self.offset
+
                 return tuple(values)
             else:
                 # Bad CRC, skip this byte and continue searching
@@ -117,9 +143,32 @@ class FT300Handler:
 
         return None
 
-    def read_ft(self):
-        """Read force/torque data_manager"""
+    def read_ft(self, flush_old=True):
+        """
+        读取力/力矩数据
+        Args:
+            flush_old: 是否清空旧数据，只读最新的
+        """
+        if flush_old:
+            # 清空串口和内部缓冲区中的旧数据
+            self._flush_old_data()
+
         return self.find_and_parse_packet()
+
+    def _flush_old_data(self):
+        """清空旧数据，确保读取最新"""
+        # 方法 1：重置串口输入缓冲区
+        if self.ser:
+            self.ser.reset_input_buffer()
+
+        # 方法 2：清空内部缓冲区
+        self.buffer = b''
+
+        # 方法 3：读取并丢弃所有待处理数据
+        # 然后读一个新的完整包
+        waiting = self.ser.in_waiting
+        if waiting > 0:
+            _ = self.ser.read(waiting)
 
     def close(self):
         if self.ser:
@@ -141,7 +190,7 @@ def main():
         print("Failed to connect")
         sys.exit(1)
 
-    print("\nReading sensor data_manager... Press Ctrl+C to stop\n")
+    print("\nReading sensor data... Press Ctrl+C to stop\n")
     print("Expected format: ( Fx[N] , Fy[N] , Fz[N] , Mx[Nm] , My[Nm] , Mz[Nm] )")
     print("-" * 70)
 

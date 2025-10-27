@@ -11,6 +11,8 @@ import struct
 
 from robokit.data_manager.ft300_handler import FT300Handler as FT300
 
+# Draw a dynamic visual separator line
+# Which task is closer to force??
 
 def main():
     import argparse

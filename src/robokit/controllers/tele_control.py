@@ -386,6 +386,12 @@ class BaseController:
         self.need_saving = True
         self.saving_dir = os.path.join(self.saving_root, self.get_datetime_str())
         self.saving_frame_idx = 0
+
+        # 在此处添加校准逻辑
+        if hasattr(self, 'ftsensor') and self.ftsensor is not None:
+            print("Re-calibrating FT sensor for new episode...")
+            self.ftsensor.calibrate()
+
         self.on_rumble()
         time.sleep(0.1)
         print("[tele_control] Episode Started")
@@ -608,11 +614,10 @@ class PS5DualSenseController(BaseController):
     def on_large_force_detected(self, force_val: float) -> None:
         # return  # disable rumble for FT300
         # print("[DEBUG] force_val:", force_val)
-        return
-        large_threshold = -107.4
+        large_threshold = -3
         force_val = large_threshold - force_val
         if force_val > 0:
-            self.on_rumble(low_freq=0.05, high_freq=0.2*(1 + force_val), duration=50)
+            self.on_rumble(low_freq=0.05, high_freq=0.2*(1 + force_val * 0.1), duration=30)
 
 
 
@@ -624,7 +629,7 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         PS5DualSenseController.__init__(self, robot, joystick_idx=joystick_idx,
                                      saving_root=saving_root, **kwargs)
         self.imu_controller = RawIMUHandler()
-        self.angular_scale = .4
+        self.angular_scale = .2
 
     def update_xyz(self):
 

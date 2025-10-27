@@ -20,6 +20,14 @@ task_instructions = [
     "then pour the beans into the target cup.",
     # [4] Spoon
     "Pick up the spoon in the cup, and then place the spoon into a bowl.",
+    # [5] Sweep
+    "Pick up the broom and sweep the coffee beans on the table into the dustpan.",
+    # [6] Eggs
+    "Pick up two eggs from a plate, and then place the eggs into a egg carton.",
+    # [7] Pour water
+    "Pick up the measuring cup and pour the water into a glass.",
+    # [8] Wipe
+    "Wiping the writing on the whiteboard.",
 ]
 
 
@@ -37,6 +45,7 @@ def main(opts):
         test_url = "http://g7-debug.hkueai.org"
     else:
         raise Exception("Port number should be non-negative.")
+    print("[Info] Connecting to GPU service at:", test_url)
 
     print("[Info] Using task:", task_instructions[opts.task])
     gpu_connector = ServiceConnector(base_url=test_url)
@@ -46,10 +55,10 @@ def main(opts):
         cur_task_text=task_instructions[opts.task],
         run_loops=5000,
         img_hw=(480, 848),  # ori:(480, 848)
-        resize_hw=(128, 160),  # ori:(128, 160)
-        buffer_size=5,  # ori:1
+        resize_hw=(112, 160),  # ori:(128, 160)
+        buffer_size=1,  # ori:1
         enable_auto_ae_wb=True,
-        fps=30,
+        fps=20,  # ori:30
         speed_scale=1.,
         action_save_flag=opts.action_save_flag,
     )  # TODO: better AE-WB setting
@@ -66,8 +75,12 @@ def main(opts):
 if __name__ == "__main__":
     """
     Example usage:
+    [Local infer]:
     python scripts/03_run_real_evaluator.py  \
-        -p 6060
+        -p 5880
+    [Remote infer]:
+    python scripts/03_run_real_evaluator.py  \
+        -p 0
     """
     args = argparse.ArgumentParser("03 Run Real Evaluator")
     # debug: 6060

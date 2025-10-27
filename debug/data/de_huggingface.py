@@ -20,9 +20,11 @@ upload_fns = [
 
     # "1009_spoon_pick_place.zip"
 
-    "1010_sweep_bean.zip",
-    "1010_pour_bean.zip",
-    "1010_wipe_white_board.zip"
+    # "1017_sweep_bean.zip",
+    "1024_sweep_bean.zip",
+    "1024_eggs_pick_place.zip",
+    "1024_pour_water.zip",
+    "1024_wipe_white_board.zip"
 ]
 
 for upload_fn in upload_fns:

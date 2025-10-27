@@ -83,7 +83,9 @@ class ServiceConnector:
             if joint_state.shape[-1] == 6:  # only contains TCP xyz + abc
                 B, T, D = joint_state.shape
                 joint_state = np.concatenate((joint_state, np.zeros((B, T, 2))), axis=-1)
-            assert joint_state.shape[-1] == 8, "Joint state should be 8-dim."
+            elif joint_state.shape[-1] == 12:  # TCP xyz-abc 6 + force 6
+                pass
+            assert joint_state.shape[-1] in (8, 12), "Joint state should be 8/12-dim."
 
             request_to_policy = StepRequestFromEvaluator.encode_from_raw(
                 instruction=task_description,
@@ -101,6 +103,8 @@ class ServiceConnector:
 
             response = response.json()
             raw_actions = StepRequestFromPolicy(action=response["action"]).decode_to_raw()["action"]  # (B,H,7）
+            if self.send_cnt == 0:
+                raw_actions = np.zeros_like(raw_actions)
 
             self.cache_actions_B_T_D = raw_actions
         else:  # don't send anything, to save robots bandwidth

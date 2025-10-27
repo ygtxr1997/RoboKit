@@ -8,6 +8,7 @@ from PIL import Image
 from robokit.connects.service_connector import ServiceConnector
 from robokit.robots.robot_client_inovo import RobotClient
 from robokit.data_manager.realsense_handler import RealsenseHandler
+from robokit.data_manager.ft300_handler import FT300Handler
 from robokit.data_manager.data_handler import DataHandler, ImageAsVideoSaver, ActionAsVideoSaver
 from robokit.debug_utils.images import concatenate_rgb_images
 
@@ -38,6 +39,7 @@ class RealWorldEvaluator:
         self.connector.resize_hw = resize_hw
         self.start_time = time.time()
 
+        # Cameras
         self.fps = fps
         self.camera = RealsenseHandler(
             frame_rate=60,
@@ -48,6 +50,12 @@ class RealWorldEvaluator:
         self.camera.set_ae_wb_auto(enable_auto_ae_wb)
         if not enable_auto_ae_wb:
             self.camera.set_ae_wb(exposure=50)
+
+        # Force Sensor
+        self.ftsensor = FT300Handler()
+        if not self.ftsensor.connect():
+            print("Failed to connect force torque sensor")
+            exit()
 
         self.speed_scale = speed_scale
 
@@ -103,11 +111,11 @@ class RealWorldEvaluator:
         # cur_task_text = "pick up the shovel and put it into the cup"
         cur_task_text = self.cur_task_text
         buffer_size = self.buffer_size
+        self.reset()
         self.connector.init_socket(cur_task_text)
         self.connector.send_reset(cur_task_text)
-        self.reset()
 
-        for _ in tqdm(range(200), desc="Skipping frames:"):
+        for _ in tqdm(range(100), desc="Skipping frames:"):
             self.capture_env_observation()
 
         while True:
@@ -123,7 +131,9 @@ class RealWorldEvaluator:
                 cur_primary_rgb = frame_obs['primary_rgb']
                 cur_gripper_rgb = frame_obs['gripper_rgb']
                 # cur_joint_state = frame_obs['robot_obs'].tolist()[7:13]  # Real joint_state
-                cur_joint_state = frame_obs['robot_obs'].tolist()[:6]  # TCP pos as joint_state
+                cur_joint_state = frame_obs['robot_obs'][:6]  # TCP pos as joint_state
+                cur_force = frame_obs['force']  # (6,)
+                cur_joint_state = np.concatenate([cur_joint_state, cur_force], axis=0)  # (12,)
 
                 # if len(self.frame_buffer['primary_rgb']) == 0:
                 #     self.frame_buffer['primary_rgb'].append(cur_primary_rgb)
@@ -158,24 +168,26 @@ class RealWorldEvaluator:
                         self.frame_buffer[key].pop(0)
                     self.frame_buffer[key].append(val)
 
-                # --- 构造输出（长度一定为 buffer_size） ---
+                # --- 构造输出, add pad before the data（长度一定为 buffer_size） ---
                 def pad_to_buffer(data_list, pad_with):
+                    """
+                    :return: (buffer_size,D) np.ndarray or List
+                    """
                     padded = [pad_with for _ in range(buffer_size - len(data_list))] + data_list
                     return np.stack(padded) if isinstance(pad_with, np.ndarray) else padded
-
 
                 cur_primary_rgb = pad_to_buffer(
                     self.frame_buffer['primary_rgb'],
                     np.zeros_like(cur_primary_rgb)
-                )
+                )  # (T,H,W,C)
                 cur_gripper_rgb = pad_to_buffer(
                     self.frame_buffer['gripper_rgb'],
                     np.zeros_like(cur_gripper_rgb)
                 )
                 cur_joint_state = pad_to_buffer(
                     self.frame_buffer['joint_state'],
-                    [0.] * len(cur_joint_state)
-                    )
+                    np.zeros_like(cur_joint_state)
+                )  # (T,D)
 
                 # Save current image
                 saved_image = concatenate_rgb_images(
@@ -190,7 +202,7 @@ class RealWorldEvaluator:
                     primary_rgb=cur_primary_rgb[None, :],  # (1,T,H,W,C) to List[str]
                     gripper_rgb=cur_gripper_rgb[None, :],
                     task_description=cur_task_text,
-                    joint_state=np.array(cur_joint_state)[None, :],  # [[0.] * 6] * T -> (1,T,6)
+                    joint_state=cur_joint_state[None, :],  # (1,T,6+6)
                 )
                 assert action.shape[-1] == 7, f"action.shape[-1]={action.shape} is not (:,7)"
                 print("[Info]", self.step_cnt,
@@ -252,12 +264,19 @@ class RealWorldEvaluator:
             robot_data['gripper_moving_to'],
         ])  # shape:(14,)
 
+        ft_data = self.ftsensor.read_ft()  # (fx, fy, fz, mx, my, mz)
+        frame_force = np.array([
+            ft_data[0], ft_data[1], ft_data[2],
+            ft_data[3], ft_data[4], ft_data[5],
+        ])  # (6,)
+
         env_obs_dict = {
             "primary_rgb": camera_data['color1'],
             "gripper_rgb": camera_data['color2'],
             "primary_depth": camera_data['depth1'],
             "gripper_depth": camera_data['depth2'],
             "robot_obs": frame_robot_obs,
+            "force": frame_force,
         }
         return env_obs_dict
 
