@@ -34,12 +34,12 @@ env_light_params = {
 # task_instruction = "Pick up the broom and sweep the coffee beans on the table into the dustpan."
 #
 ''' Pour water '''
-# saving_root = "/home/geyuan/local_soft/TCL/1024_pour_water/"
-# task_instruction = "Pick up the measuring cup and pour the water into a glass."
+saving_root = "/home/geyuan/local_soft/TCL/1024_pour_water/"
+task_instruction = "Pick up the measuring cup and pour the water into a glass."
 #
 ''' Wipe '''
-saving_root = "/home/geyuan/local_soft/TCL/1024_wipe_white_board/"
-task_instruction = "Wiping the writing on the whiteboard."
+# saving_root = "/home/geyuan/local_soft/TCL/1024_wipe_white_board/"
+# task_instruction = "Wiping the writing on the whiteboard."
 
 ''' Pot '''
 # saving_root = "/home/geyuan/local_soft/TCL/0627_pot_light_rand/"
@@ -71,7 +71,7 @@ controller = PS5DualSenseIMUController(
     saving_root=saving_root,
     task_instruction=task_instruction,
     saving_workers=6,
-    action_fps=20, #15, #30,  # ori:30, rand:60
+    action_fps=30, #15, #30,  # ori:30, rand:60
     **env_params
 )
 

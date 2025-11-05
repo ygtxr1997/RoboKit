@@ -48,14 +48,17 @@ def main(opts):
     print("[Info] Connecting to GPU service at:", test_url)
 
     print("[Info] Using task:", task_instructions[opts.task])
-    gpu_connector = ServiceConnector(base_url=test_url)
+    gpu_connector = ServiceConnector(
+        base_url=test_url,
+        max_cache_actions=32,
+    )
     evaluator = RealWorldEvaluator(
         gpu_service_connector=gpu_connector,
         robot=robot_client,
         cur_task_text=task_instructions[opts.task],
         run_loops=5000,
         img_hw=(480, 848),  # ori:(480, 848)
-        resize_hw=(112, 160),  # ori:(128, 160)
+        resize_hw=(16*10, 16*15),  # ori:(16*7, 16*10), now:(16*10, 16*15)
         buffer_size=1,  # ori:1
         enable_auto_ae_wb=True,
         fps=20,  # ori:30
@@ -88,5 +91,6 @@ if __name__ == "__main__":
     args.add_argument("-p", "--port", default=5880, type=int, help="Port number of GPU connects")
     args.add_argument("-t", "--task", default=-1, type=int, help="Index of task")
     args.add_argument("-a", "--action_save_flag", default=False, action="store_true", help="Action save flag")
+    args.add_argument("-k", "--future_skip", default=1, type=int, help="Skip for future frames")
     args = args.parse_args()
     main(args)

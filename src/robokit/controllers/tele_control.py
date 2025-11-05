@@ -75,7 +75,7 @@ class BaseController:
                 self.camera.set_ae_wb(**ae_wb_param)
 
         self.ftsensor = FT300Handler()
-        if not self.ftsensor.connect():
+        if not self.ftsensor.connect(calibrate_samples=200):
             print("Failed to connect force torque sensor")
             exit()
 
@@ -629,7 +629,7 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         PS5DualSenseController.__init__(self, robot, joystick_idx=joystick_idx,
                                      saving_root=saving_root, **kwargs)
         self.imu_controller = RawIMUHandler()
-        self.angular_scale = .2
+        self.angular_scale = .35  # fps20:0.2, fps30:0.4
 
     def update_xyz(self):
 
