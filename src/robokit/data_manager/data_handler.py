@@ -249,29 +249,48 @@ class ForkedDataSaver:
 
 
 class ImageAsVideoSaver:
-    def __init__(self, buffer_size=10, frame_rate=30, width=640, height=480):
+    def __init__(self, buffer_size=10, frame_rate=30, width=640, height=480,
+                 save_dir="./output", save_fn="output_video.mp4"):
         # 初始化类，设置最大缓存大小、帧率、视频分辨率等
         self.buffer_size = buffer_size
         self.frame_rate = frame_rate
         self.width = width
         self.height = height
 
+        self.save_dir = save_dir
+        self.save_fn = save_fn
+        self.save_times = 0
+
         # 使用队列来存储图像
         self.image_queue = deque(maxlen=self.buffer_size)
 
-    def add_image(self, image: np.ndarray):
+    def add_image(self, image_RGB: np.ndarray):
         """
         向队列中添加图像
         :param image: 要添加到视频队列中的图像，应该是 numpy 数组形式
         """
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        image = cv2.cvtColor(image_RGB, cv2.COLOR_RGB2BGR)
         # 确保图像大小为 (height, width, channels)，并且图像是 BGR 格式
         if image.shape[0] != self.height or image.shape[1] != self.width:
             image = cv2.resize(image, (self.width, self.height))
 
         self.image_queue.append(image)
 
-    def save_to_video(self, path: str):
+        # Save to a temporary video if buffer is full
+        if len(self.image_queue) >= self.buffer_size:
+            self.save_to_video()
+            self.clear_buffer()
+
+    def add_video(self, image_T_HWC: np.ndarray):
+        """
+        向队列中批量添加图像序列
+        :param image_T_HWC: 要添加到视频队列中的图像序列，应该是 numpy 数组形式，形状为 (T, H, W, C)
+        """
+        assert image_T_HWC.ndim == 4, "Input video must be a 4D numpy array (T, H, W, C)"
+        for img in image_T_HWC:
+            self.add_image(img)
+
+    def save_to_video(self, path: str = None):
         """
         将队列中的图像保存为视频
         :param path: 保存视频的路径（例如: 'output.avi'）
@@ -279,6 +298,11 @@ class ImageAsVideoSaver:
         if len(self.image_queue) == 0:
             print("No images in the queue to save.")
             return
+
+        if path is None:
+            os.makedirs(self.save_dir, exist_ok=True)
+            save_fn = self.save_fn.replace('.mp4', f'_{self.save_times:03d}.mp4')
+            path = os.path.join(self.save_dir, save_fn)
 
         # 获取视频的编码器
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -292,7 +316,12 @@ class ImageAsVideoSaver:
 
         # 释放 VideoWriter
         out.release()
-        print(f"Video saved at {path}")
+        self.save_times += 1
+        print(f"[ImageAsVideoSaver] Video saved at {path}")
+
+    def clear_buffer(self):
+        """清空图像缓存"""
+        self.image_queue.clear()
 
 
 class ActionAsVideoSaver:
