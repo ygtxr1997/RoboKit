@@ -29,7 +29,8 @@ class DataHandler:
             "actions": np.random.randn(7),  # (x,y,z,row,pitch,yaw,g)
             "rel_actions": np.random.randn(7),  # (j_x,j_y,j_z,j_ax,j_ay,j_az,g)
             "robot_obs": np.random.randn(14),
-            # (tcp pos (3), tcp ori (3), gripper width (1), joint_states (6) in rad, gripper_action (1)
+            # tcp pos (3), tcp ori (3), gripper width (1), joint_states (6) in rad, gripper_action (1)
+            "force_torque": np.random.randn(6),  # (fx,fy,fz,mx,my,mz)
         }
         """
         self.data_dict = data_dict

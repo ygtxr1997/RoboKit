@@ -20,7 +20,12 @@ FILE_NAMES=(
 #  "0704_pepper_object_rand"
 #  "0704_pepper_light_rand"
 #  "0627_pot_table_rand"
-"1009_spoon_pick_place"
+#  "1009_spoon_pick_place"
+#  "1021_sweep_bean"
+#"1024_sweep_bean"
+"1024_eggs_pick_place"
+"1024_pour_water"
+#"1024_wipe_white_board"
 )
 
 # 路径配置
@@ -207,7 +212,7 @@ main() {
         exit 1
     fi
 
-    python scripts/01_preprocess_data.py \
+    python -m robokit.datasets.preprocess_data \
         -R "${source_dir}" \
         --as_hdf5 "${output_file}"
   done

@@ -143,6 +143,89 @@ def plot_action_wrt_time(action_data: np.ndarray):
     return frames, fig, (ax1, ax2)
 
 
+def save_frames_as_video(
+    frames: List[np.ndarray],
+    save_path: str,
+    fps: int = 30,
+    codec: str = None,                 # 手动指定编码器，例如 "mp4v" / "avc1" / "XVID"
+    target_size: Tuple[int, int] = None,  # (width, height)，不传则用首帧尺寸
+):
+    """
+    将一组 RGB 帧写成视频文件（支持帧尺寸不一致、float/uint8、灰度/RGBA）。
+    - 自动把 float[0,1] 或其他数值类型规范化成 uint8
+    - 灰度扩成 3 通道，RGBA 丢弃 alpha
+    - 若帧尺寸与 target_size 不一致会统一 resize
+    - 根据文件后缀选择合适的编码器并尝试回退
+    """
+    import os
+    import cv2
+    import numpy as np
+
+    if not frames:
+        raise ValueError("save_frames_as_video: frames 为空")
+
+    # 1) 确保保存目录存在
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+
+    # 2) 规范化到 uint8 RGB(3 通道)
+    def _to_uint8_rgb(img: np.ndarray) -> np.ndarray:
+        arr = np.asarray(img)
+        if arr.ndim == 2:            # 灰度 -> 3 通道
+            arr = np.repeat(arr[..., None], 3, axis=2)
+        elif arr.ndim == 3 and arr.shape[2] == 4:  # 丢 alpha
+            arr = arr[..., :3]
+        elif arr.ndim != 3 or arr.shape[2] != 3:
+            raise ValueError(f"非法帧形状: {arr.shape}, 期望(H,W,3)/(H,W)/(H,W,4)")
+
+        if arr.dtype != np.uint8:
+            if np.issubdtype(arr.dtype, np.floating):
+                arr = np.clip(arr, 0.0, 1.0)
+                arr = np.rint(arr * 255.0).astype(np.uint8)
+            else:
+                arr = np.clip(arr, 0, 255).astype(np.uint8)
+        return arr
+
+    frames = [_to_uint8_rgb(f) for f in frames]
+
+    # 3) 统一分辨率
+    if target_size is None:
+        h0, w0 = frames[0].shape[:2]
+        target_size = (w0, h0)  # (width, height)
+
+    if any(f.shape[:2] != (target_size[1], target_size[0]) for f in frames):
+        frames = [cv2.resize(f, target_size, interpolation=cv2.INTER_AREA) for f in frames]
+
+    # 4) 选择编码器（可手动传 codec，否则按扩展名尝试回退）
+    ext = os.path.splitext(save_path)[1].lower()
+    if codec:
+        candidates = [codec]
+    elif ext in (".mp4", ".m4v", ".mov"):
+        candidates = ["mp4v", "avc1", "H264"]   # 按常见可用性排序
+    elif ext == ".avi":
+        candidates = ["XVID", "MJPG"]
+    else:
+        candidates = ["mp4v"]
+
+    if fps <= 0:
+        fps = 30
+
+    writer = None
+    for c in candidates:
+        fourcc = cv2.VideoWriter_fourcc(*c)
+        vw = cv2.VideoWriter(save_path, fourcc, float(fps), target_size, True)
+        if vw is not None and vw.isOpened():
+            writer = vw
+            break
+    if writer is None:
+        raise RuntimeError(f"无法打开 VideoWriter，尝试的编码器：{candidates}，路径：{save_path}")
+
+    # 5) 写入（RGB -> BGR）
+    for f in frames:
+        writer.write(cv2.cvtColor(f, cv2.COLOR_RGB2BGR))
+    writer.release()
+    return save_path
+
+
 def plot_force_sensor_wrt_time(sensor_data: np.ndarray):
     """
     Plot force sensor data_manager (forces and moments) with respect to time

@@ -37,8 +37,10 @@ class TCLDataset(Dataset):
         assert (len(self.ep_fns) == len(self.map_index_to_task_id))
 
         self.extracted_data = {}
-        if use_extracted:
+        if use_extracted:  # NOTE: needs to be updated
             self.load_npy_by_key("rel_actions")
+            # self.load_npy_by_key("robot_obs")
+            # self.load_npy_by_key("force_torque")
 
         if load_keys is None:
             load_keys = ["primary_rgb", "gripper_rgb", "primary_depth", "gripper_depth",
@@ -65,6 +67,7 @@ class TCLDataset(Dataset):
 
         npz_data = self.load_single_frame(str(npz_path))
         if npz_data is None:  # file broken or other error
+            print("[Warning] file broken at:", npz_path, ", load a random one instead.")
             npz_data = self.__getitem__(np.random.randint(0, len(self.ep_fns)))
 
         return npz_data
@@ -82,6 +85,7 @@ class TCLDataset(Dataset):
     def __len__(self):
         return self.total_length
 
+    # Not used, replaced by `extract_data_and_compute_statistics`
     def get_statistics_and_save(
             self,
             save_json_path: str = None,
@@ -152,13 +156,7 @@ class TCLDataset(Dataset):
 
         return statistics
 
-    def load_statistics_from_json(self, json_path: str) -> dict:
-        json_path = os.path.join(self.root, json_path)
-        print("[TCLDataset] loading dataset statistics from:", json_path)
-        with open(json_path, 'r') as json_file:
-            statistics = json.load(json_file)
-        return statistics
-
+    # Not used, replaced by `extract_data_and_compute_statistics`
     def save_to_npy_by_key(
             self,
             key: str,
@@ -203,8 +201,8 @@ class TCLDataset(Dataset):
 
     def extract_data_and_compute_statistics(
             self,
-            keys_to_extract: List[str] = None,
-            stats_key: str = "rel_actions",
+            keys_to_extract: List[str],
+            stats_keys: str = None,  # in [`rel_actions`, `robot_obs`, `force_torque`]
             save_json_path: str = None,
             batch_size: int = 256,
             num_workers: int = 16,
@@ -212,58 +210,43 @@ class TCLDataset(Dataset):
     ) -> dict:
         """
         在一次数据集遍历中同时完成：
-        1. 提取指定keys的数据并保存为.npy文件
-        2. 计算stats_key的统计信息
+        1. 提取指定 keys 的数据并保存为 .npy 文件
+        2. 对 stats_keys 中的每个 key 计算统计信息（逐元素/逐通道）
 
-        :param keys_to_extract: 需要提取并保存为.npy的keys列表
-        :param stats_key: 需要计算统计信息的key，默认为'rel_actions'
-        :param save_json_path: 统计信息保存路径
-        :param batch_size: 批处理大小
-        :param num_workers: 工作进程数
-        :param pin_memory: 是否使用内存锁定
-        :return: 统计信息字典
+        :param keys_to_extract: 需要提取并保存为 .npy 的 keys 列表
+        :param stats_keys: 需要计算统计信息的 keys 列表（如 ['rel_actions', 'robot_obs', 'force_torque']）
+        :param save_json_path: 统计信息保存路径（rel path to self.root）or abs path
         """
         if keys_to_extract is None:
             keys_to_extract = ["rel_actions"]
+        if stats_keys is None:
+            stats_keys = keys_to_extract
 
-        # 确保stats_key在load_keys中
-        if stats_key not in self.load_keys:
-            raise ValueError(f"stats_key '{stats_key}' not in load_keys: {self.load_keys}")
-
-        # 确保所有要提取的keys都在load_keys中
-        for key in keys_to_extract:
-            if key not in self.load_keys:
-                raise ValueError(f"key '{key}' not in load_keys: {self.load_keys}")
+        # 校验：所有统计/提取的 key 都必须在 load_keys 中
+        for k in set(keys_to_extract) | set(stats_keys):
+            if k not in self.load_keys:
+                raise ValueError(f"key '{k}' not in load_keys: {self.load_keys}")
 
         print(f"[TCLDataset] Starting combined extraction and statistics computation...")
         print(f"[TCLDataset] Keys to extract: {keys_to_extract}")
-        print(f"[TCLDataset] Stats key: {stats_key}")
+        print(f"[TCLDataset] Stats keys: {stats_keys}")
 
-        # 1. 初始化统计量（假设rel_actions有7个分量）
-        n_components = 7
-        min_vals = np.inf * np.ones(n_components, dtype=np.float64)
-        max_vals = -np.inf * np.ones(n_components, dtype=np.float64)
-        sum_vals = np.zeros(n_components, dtype=np.float64)
-        squared_sum = np.zeros(n_components, dtype=np.float64)
-        total_count = 0
+        # 统计量容器（为每个 stats_key 单独维护）
+        # 每个 key 的条目在第一次见到 batch 时按维度初始化
+        stats_aggr = {}  # k -> dict(min, max, sum, sqsum, count, n_components)
 
-        # 2. 初始化数据收集容器
+        # 提取数据的收集容器
         collected_data = {key: [] for key in keys_to_extract}
 
-        # 3. 自定义collate_fn：同时提取多个keys的数据
+        # collate：联合需要提取与需要统计的 key，避免二次遍历
+        union_keys = list(set(keys_to_extract) | set(stats_keys))
+
         def collate_fn(batch):
             result = {}
-            # 提取所有需要的keys
-            for key in keys_to_extract:
+            for key in union_keys:
                 result[key] = np.stack([item[key] for item in batch], axis=0)
-
-            # 如果stats_key不在提取列表中，单独提取
-            if stats_key not in keys_to_extract:
-                result[stats_key] = np.stack([item[stats_key] for item in batch], axis=0)
-
             return result
 
-        # 4. 构造DataLoader
         loader = DataLoader(
             self,
             batch_size=batch_size,
@@ -273,74 +256,108 @@ class TCLDataset(Dataset):
             collate_fn=collate_fn
         )
 
-        # 5. 遍历DataLoader，同时更新统计量和收集数据
+        total_count = 0
         for batch_data in tqdm(loader, desc="Processing batches"):
-            # 更新统计信息
-            batch_stats_data = batch_data[stats_key]
-            if not isinstance(batch_stats_data, np.ndarray):
-                batch_stats_data = batch_stats_data.numpy()
+            # 1) 统计
+            for key in stats_keys:
+                x = batch_data[key]
+                if not isinstance(x, np.ndarray):
+                    x = x.numpy()
+                # 将除 batch 维以外全部展平，统一成 (B, D)
+                x = x.reshape(x.shape[0], -1)
+                B, D = x.shape
 
-            B = batch_stats_data.shape[0]
+                # 初始化该 key 的聚合器
+                if key not in stats_aggr:
+                    stats_aggr[key] = {
+                        "min": np.full(D, np.inf, dtype=np.float64),
+                        "max": np.full(D, -np.inf, dtype=np.float64),
+                        "sum": np.zeros(D, dtype=np.float64),
+                        "sqsum": np.zeros(D, dtype=np.float64),
+                        "count": 0,
+                        "n_components": D,
+                    }
 
-            # 更新 min/max
-            min_vals = np.minimum(min_vals, batch_stats_data.min(axis=0))
-            max_vals = np.maximum(max_vals, batch_stats_data.max(axis=0))
+                ag = stats_aggr[key]
+                ag["min"] = np.minimum(ag["min"], x.min(axis=0))
+                ag["max"] = np.maximum(ag["max"], x.max(axis=0))
+                ag["sum"] += x.sum(axis=0)
+                ag["sqsum"] += (x ** 2).sum(axis=0)
+                ag["count"] += B
 
-            # 更新 sum 和 squared sum
-            sum_vals += batch_stats_data.sum(axis=0)
-            squared_sum += (batch_stats_data ** 2).sum(axis=0)
-            total_count += B
-
-            # 收集要提取的数据
+            # 2) 收集需要提取的数据
             for key in keys_to_extract:
-                batch_key_data = batch_data[key]
-                if not isinstance(batch_key_data, np.ndarray):
-                    batch_key_data = batch_key_data.numpy()
-                collected_data[key].append(batch_key_data)
+                xi = batch_data[key]
+                if not isinstance(xi, np.ndarray):
+                    xi = xi.numpy()
+                collected_data[key].append(xi)
 
-        # 6. 计算最终的统计信息
-        mean_vals = sum_vals / total_count
-        var_vals = (squared_sum / total_count) - (mean_vals ** 2)
-        std_vals = np.sqrt(np.maximum(var_vals, 0.0))
+            total_count += next(iter(batch_data.values())).shape[0]
+
+        # 汇总每个 key 的统计结果
+        out_stats = {}
+        for key, ag in stats_aggr.items():
+            mean = ag["sum"] / ag["count"]
+            var = (ag["sqsum"] / ag["count"]) - (mean ** 2)
+            std = np.sqrt(np.maximum(var, 0.0))
+            out_stats[key] = {
+                "min": ag["min"].tolist(),
+                "max": ag["max"].tolist(),
+                "mean": mean.tolist(),
+                "std": std.tolist(),
+                "n_components": ag["n_components"],
+                "total_count": ag["count"],
+            }
 
         statistics = {
-            "min": min_vals.tolist(),
-            "max": max_vals.tolist(),
-            "mean": mean_vals.tolist(),
-            "std": std_vals.tolist(),
-            "total_len": total_count
+            "total_len": total_count,
+            "stats": out_stats
         }
+        self.meta_statistics = statistics
 
-        # 7. 保存统计信息到JSON
+        # 保存统计信息
         if save_json_path:
-            save_path = os.path.join(getattr(self, 'root', ''), save_json_path)
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            with open(save_path, 'w') as fp:
-                json.dump(statistics, fp, indent=4)
-            print(f"[TCLDataset] Statistics saved to: {save_path}")
+            self.save_meta_as_json(save_json_path, statistics)
 
-        # 8. 拼接并保存提取的数据
+        # 拼接并保存提取的数据
         for key in keys_to_extract:
             all_data = np.concatenate(collected_data[key], axis=0)
-
-            # 保存路径
             save_path = os.path.join(self.root, f"extracted/{key}.npy")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
             np.save(save_path, all_data)
             print(f"[TCLDataset] Key '{key}' shape={all_data.shape} saved to '{save_path}'")
-
-            # 同时加载到extracted_data中
             self.extracted_data[key] = all_data
             print(f"[TCLDataset] Key '{key}' loaded to extracted_data")
 
         print(f"[TCLDataset] Combined extraction and statistics computation completed!")
         return statistics
 
+    def save_meta_as_json(self, json_path: str, meta_statistics: dict = None, force_path: bool = False):
+        if os.path.isabs(json_path) or force_path:
+            save_path = json_path
+        else:
+            save_path = os.path.join(getattr(self, 'root', ''), json_path)
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        if meta_statistics is None:
+            meta_statistics = self.meta_statistics
+        with open(save_path, 'w') as fp:
+            json.dump(meta_statistics, fp, indent=4)
+        print(f"[TCLDataset] Statistics saved to: {save_path}")
+
+    def load_meta_from_json(self, json_path: str) -> dict:
+        if os.path.isabs(json_path):
+            pass
+        else:
+            json_path = os.path.join(self.root, json_path)
+        print("[TCLDataset] loading dataset statistics from:", json_path)
+        with open(json_path, 'r') as json_file:
+            statistics = json.load(json_file)
+        return statistics
+
 
 class TCLDatasetHDF5(TCLDataset):
     def __init__(self, root: str, h5_path: str, keys_config: Dict[str, str] = None, use_h5: bool = True,
-                 use_extracted: bool = True, load_keys: List[str] = None, is_img_decoded_in_h5: bool = False):
+                 use_extracted: bool = False, load_keys: List[str] = None, is_img_decoded_in_h5: bool = False):
         """
         初始化 TCLDatasetHDF5 数据集对象
         :param root: `.npz` 数据集的根目录
@@ -359,7 +376,8 @@ class TCLDatasetHDF5(TCLDataset):
             "language_text": "string",
             "actions": "float",
             "rel_actions": "float",
-            "robot_obs": "float"
+            "robot_obs": "float",
+            "force_torque": "float",
         }
         self.keys_config = keys_config  # 例如 {"primary_rgb": "rgb", "language_text": "string", ...}
 

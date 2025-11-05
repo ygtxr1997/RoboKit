@@ -1,5 +1,5 @@
 import argparse
-from robokit.debug_utils.printer import print_batch
+from robokit.debug_utils.printer import print_batch, beautiful_print
 from robokit.datasets.tcl_datasets import TCLDataset, TCLDatasetHDF5
 
 
@@ -53,6 +53,9 @@ def preprocess(opts):
 def convert_to_hdf5(opts):
     num_workers = opts.num_workers
     data_root = opts.root
+    batch_size = opts.batch_size
+    num_workers = opts.num_workers
+
     if opts.resize == "240p":
         resize_wh = (320, 240)
     elif opts.resize == "480p":
@@ -60,12 +63,28 @@ def convert_to_hdf5(opts):
     else:
         raise NotImplementedError(f"Unknown resize {opts.resize}")
 
-    # 5. Convert to HDF5
+    # 2. Save and load statistics info
     converter = TCLDatasetHDF5(
         data_root,
         opts.as_hdf5,
         use_h5=False,
     )
+
+    print("Save and load statistics info")
+    statistics_json_path = "statistics.json"
+
+    _ = converter.extract_data_and_compute_statistics(
+        keys_to_extract=["rel_actions", "robot_obs", "force_torque"],  # in [`rel_actions`, `robot_obs`, `force_torque`]
+        save_json_path=statistics_json_path,
+        batch_size=batch_size,
+        num_workers=num_workers,
+    )
+
+    meta_info = converter.load_meta_from_json(json_path=statistics_json_path)
+    print("[DEBUG] meta_info:")
+    beautiful_print(meta_info)
+
+    # 5. Convert to HDF5
     converter.convert_to_hdf5(
         num_workers=num_workers,
         pin_memory=True,
@@ -75,7 +94,7 @@ def convert_to_hdf5(opts):
     h5_dataset = TCLDatasetHDF5(
         data_root,
         opts.as_hdf5,
-        load_keys=["primary_rgb", "gripper_rgb", "language_text", "rel_actions", "robot_obs"],
+        load_keys=["primary_rgb", "gripper_rgb", "language_text", "rel_actions", "robot_obs", "force_torque"],
         use_h5=True,
         is_img_decoded_in_h5=False,
     )
