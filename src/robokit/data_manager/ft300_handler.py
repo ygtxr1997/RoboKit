@@ -20,10 +20,10 @@ class FT300Handler:
         self.buffer = b''
         self.offset = np.zeros(6)  # Added for drift/offset compensation
 
-    def connect(self):
+    def connect(self, calibrate_samples: int = 200):
         for _ in range(5):
             if self._try_connect():
-                self.calibrate()  # Calibrate automatically upon successful connection
+                self.calibrate(num_samples=calibrate_samples)  # Calibrate automatically upon successful connection
                 return True
 
     def _try_connect(self):
@@ -45,7 +45,7 @@ class FT300Handler:
             self.port = f"{self.port_prefix}{self.port_id}"
             return False
 
-    def calibrate(self, num_samples=10):
+    def calibrate(self, num_samples=50):
         """
         Read initial samples to determine the zero-offset (drift).
         This should be called when the robot is stationary.

@@ -15,13 +15,14 @@ class ServiceConnector:
             self,
             base_url: str = "http://localhost:6060",
             resize_hw: tuple = None,
+            max_cache_actions: int = 28,
     ):
         self.base_url = base_url
         self.http_session = requests.Session()
         self.resize_hw = resize_hw
 
         # Dynamic
-        self.max_cache_actions = 1
+        self.max_cache_actions = max_cache_actions
         self.task_instruction = None
         self.send_cnt = 0
         self.cache_actions_B_T_D = None
@@ -34,7 +35,7 @@ class ServiceConnector:
         resp = resp.json()
 
         max_cache_action = resp["max_cache_action"]
-        self.max_cache_actions = max(max_cache_action, 1)
+        self.max_cache_actions = min(max_cache_action, self.max_cache_actions)
         self.send_cnt = 0
         self.cache_actions_B_T_D = None
         self.task_instruction = task_instruction
@@ -46,7 +47,7 @@ class ServiceConnector:
         resp = resp.json()
 
         max_cache_action = resp["max_cache_action"]
-        self.max_cache_actions = max(max_cache_action, 1)
+        self.max_cache_actions = min(max_cache_action, self.max_cache_actions)
         self.send_cnt = 0
 
         self.cache_actions_B_T_D = None
@@ -103,10 +104,8 @@ class ServiceConnector:
 
             response = response.json()
             raw_actions = StepRequestFromPolicy(action=response["action"]).decode_to_raw()["action"]  # (B,H,7）
-            if self.send_cnt == 0:
-                raw_actions = np.zeros_like(raw_actions)
 
-            self.cache_actions_B_T_D = raw_actions
+            self.cache_actions_B_T_D = raw_actions[:, :, :self.max_cache_actions]
         else:  # don't send anything, to save robots bandwidth
             pass
 
