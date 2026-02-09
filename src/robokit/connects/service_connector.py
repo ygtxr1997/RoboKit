@@ -11,6 +11,48 @@ from robokit.data_manager.utils_multiview import cat_multiview_video_with_anothe
 from robokit.debug_utils.times import time_stat
 
 
+class FrameBuffer:
+    def __init__(self, keys: List[str], max_obs_length: int):
+        self.keys = keys
+        self.max_obs_length = max_obs_length
+        self.buffer = {key: [] for key in keys}
+
+    def set_max_obs_length(self, max_obs_length: int):
+        self.clear()
+        self.max_obs_length = max_obs_length
+
+    def add_single(self, **kwargs):
+        used_keys = [k for k in self.keys if k in kwargs]
+        unused_keys = [k for k in self.keys if k not in kwargs]
+        unexpected_keys = [k for k in kwargs if k not in self.keys]
+        if len(used_keys) == 0 or len(unused_keys) > 0:
+            raise ValueError(f"[FrameBuffer] All keys must be provided when adding a single frame. "
+                             f"Used keys: {used_keys}, Unused keys: {unused_keys}")
+        if len(unexpected_keys) > 0:
+            raise Warning(f"[FrameBuffer] Unexpected keys: {unexpected_keys}")
+
+        for key in self.keys:
+            self.buffer[key].append(kwargs[key])
+            if len(self.buffer[key]) > self.max_obs_length:
+                self.buffer[key].pop(0)
+
+    def clear(self):
+        for key in self.keys:
+            self.buffer[key] = []
+
+    def get_padded_frames(self, zero_pad: bool = False, concat_axis: int = 0) -> dict:
+        """  Pad before the sequence to max_obs_length with zeros or first frame """
+        padded_frames = {}
+        for key in self.keys:
+            frames = self.buffer[key]
+            if len(frames) < self.max_obs_length:
+                pad_length = self.max_obs_length - len(frames)
+                pad_frame = np.zeros_like(frames[0]) if zero_pad else frames[0]
+                frames = [pad_frame] * pad_length + frames
+            padded_frames[key] = np.concatenate(frames, axis=concat_axis)
+        return padded_frames
+
+
 class ServiceConnector:
     def __init__(
             self,

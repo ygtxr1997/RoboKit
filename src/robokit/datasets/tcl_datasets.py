@@ -296,10 +296,16 @@ class TCLDataset(Dataset):
 
         # 汇总每个 key 的统计结果
         out_stats = {}
+        eps = 1e-6  # 定义一个小的 epsilon
         for key, ag in stats_aggr.items():
+            # 预处理 min 和 max，处理 min == max 的情况
+            is_equal = (ag["min"] == ag["max"])
+            ag["max"][is_equal] += eps
+            print("[TCLDataset] is_equal sum for key", key, ":", is_equal)
+
             mean = ag["sum"] / ag["count"]
             var = (ag["sqsum"] / ag["count"]) - (mean ** 2)
-            std = np.sqrt(np.maximum(var, 0.0))
+            std = np.sqrt(np.maximum(var, 1e-8))
             out_stats[key] = {
                 "min": ag["min"].tolist(),
                 "max": ag["max"].tolist(),

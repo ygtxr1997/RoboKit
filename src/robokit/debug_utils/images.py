@@ -9,7 +9,7 @@ from matplotlib.axes import Axes
 from matplotlib.animation import FuncAnimation
 
 
-def concatenate_rgb_images(img1, img2, vertical=False, resize_ratio=0.5):
+def concatenate_rgb_images(img1, img2, vertical=False, resize_ratio=1.):
     """
     拼接两个RGB图像（左右拼接）
 
@@ -39,7 +39,7 @@ def concatenate_rgb_images(img1, img2, vertical=False, resize_ratio=0.5):
         return np.vstack((img1, img2))
 
 
-def plot_action_wrt_time(action_data: np.ndarray):
+def plot_action_wrt_time(action_data: np.ndarray, only_last_frame: bool = False):
     """
     Plot action with respect to time
 
@@ -101,8 +101,11 @@ def plot_action_wrt_time(action_data: np.ndarray):
     # 帧图列表
     frames = []
 
-    print("Plotting action dynamic figures...")
-    for frame_num in range(frames_cnt):
+    if not only_last_frame:
+        print("Plotting action dynamic figures...")
+    frame_indices = [frames_cnt - 1] if only_last_frame else range(frames_cnt)
+    for frame_num in frame_indices:
+    # for frame_num in range(frames_cnt):
         # 更新 xyz 曲线
         for i, line in enumerate(lines_xyz):
             line.set_data(np.arange(frame_num + 1), action_data[:frame_num + 1, i])
@@ -226,7 +229,7 @@ def save_frames_as_video(
     return save_path
 
 
-def plot_force_sensor_wrt_time(sensor_data: np.ndarray):
+def plot_force_sensor_wrt_time(sensor_data: np.ndarray, only_last_frame: bool = False):
     """
     Plot force sensor data_manager (forces and moments) with respect to time
 
@@ -288,8 +291,10 @@ def plot_force_sensor_wrt_time(sensor_data: np.ndarray):
     # 帧图列表
     frames = []
 
-    print("Plotting force sensor dynamic figures...")
-    for frame_num in range(frames_cnt):
+    if not only_last_frame:
+        print("Plotting force sensor dynamic figures...")
+    frame_indices = [frames_cnt - 1] if only_last_frame else range(frames_cnt)
+    for frame_num in frame_indices:
         # 更新力曲线 (Fx, Fy, Fz)
         for i, line in enumerate(lines_force):
             line.set_data(np.arange(frame_num + 1), sensor_data[:frame_num + 1, i])
@@ -298,23 +303,20 @@ def plot_force_sensor_wrt_time(sensor_data: np.ndarray):
         for i, line in enumerate(lines_moment):
             line.set_data(np.arange(frame_num + 1), sensor_data[:frame_num + 1, i + 3])
 
-        # 可选：在图上显示当前值
-        if frame_num > 0:
-            # 清除之前的文本
-            for txt in ax1.texts:
-                txt.remove()
-            for txt in ax2.texts:
-                txt.remove()
+        # 清除之前的文本（稳妥）
+        for txt in list(ax1.texts):
+            txt.remove()
+        for txt in list(ax2.texts):
+            txt.remove()
 
-            # 显示当前力值
-            current_force_text = f'Current: Fx={sensor_data[frame_num, 0]:.2f}N, Fy={sensor_data[frame_num, 1]:.2f}N, Fz={sensor_data[frame_num, 2]:.2f}N'
-            ax1.text(0.02, 0.95, current_force_text, transform=ax1.transAxes,
-                     fontsize=9, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        # 显示当前力值/力矩值（当前帧）
+        current_force_text = f'Current: Fx={sensor_data[frame_num, 0]:.2f}N, Fy={sensor_data[frame_num, 1]:.2f}N, Fz={sensor_data[frame_num, 2]:.2f}N'
+        ax1.text(0.02, 0.95, current_force_text, transform=ax1.transAxes,
+                 fontsize=9, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-            # 显示当前力矩值
-            current_moment_text = f'Current: Mx={sensor_data[frame_num, 3]:.3f}Nm, My={sensor_data[frame_num, 4]:.3f}Nm, Mz={sensor_data[frame_num, 5]:.3f}Nm'
-            ax2.text(0.02, 0.95, current_moment_text, transform=ax2.transAxes,
-                     fontsize=9, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        current_moment_text = f'Current: Mx={sensor_data[frame_num, 3]:.3f}Nm, My={sensor_data[frame_num, 4]:.3f}Nm, Mz={sensor_data[frame_num, 5]:.3f}Nm'
+        ax2.text(0.02, 0.95, current_moment_text, transform=ax2.transAxes,
+                 fontsize=9, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
         plt.tight_layout()
         fig.canvas.draw()

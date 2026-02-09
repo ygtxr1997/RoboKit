@@ -23,9 +23,19 @@ FILE_NAMES=(
 #  "1009_spoon_pick_place"
 #  "1021_sweep_bean"
 #"1024_sweep_bean"
-"1024_eggs_pick_place"
-"1024_pour_water"
+#"1024_eggs_pick_place"
+#"1024_pour_water"
 #"1024_wipe_white_board"
+#"1117_red_peper_pick_place"
+#"1117_carrot_pick_place"
+#"1201_wipe_blackboard"
+#"1201_pour_water"
+#"1201_banana"
+#"1201_pepper"
+#"1201_pot"
+#"1201_coffee"
+#"1201_screw_bulb"
+"1201_screw_bulb_turn_off"
 )
 
 # 路径配置

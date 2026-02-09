@@ -1,0 +1,57 @@
+mm_datasets:
+
+lerobot_datasets:
+  # Note: will be loaded as `LerobotConfig`
+  ### Tier 0: The "Big Three" Foundation (基石)
+#  - repo_id: bridge_orig_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/
+#    select_video_keys: [observation.images.image_0]
+  - repo_id: fractal20220817_data_lerobot
+    root: /home/geyuan/datasets/ipec_lerobot/
+    select_video_keys: [observation.images.image]
+#  - repo_id: droid_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/
+#    select_video_keys: [ observation.images.exterior_image_1_left]
+#  - repo_id: droid_1.0.1  # Not available yet, has some issues
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.exterior_1_left]
+#    select_state_keys: [observation.state]
+#    select_action_keys: [action.cartesian_position]
+#
+#
+#  ### Tier 1: High-Quality Tabletop & Language (高质量桌面/语言)
+##  - repo_id: language_table_lerobot  # not used
+##    root: /home/geyuan/datasets/ipec_lerobot/fork/
+##    select_video_keys: [observation.images.rgb]
+#  - repo_id: taco_play_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.rgb_static]
+#  - repo_id: jaco_play_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.image]
+#  - repo_id: nyu_franka_play_dataset_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.image]
+#  - repo_id: furniture_bench_dataset_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.image]
+#
+#  ### Tier 2: Modern High-Res & Diverse Skills (现代高清理/技能)
+#  - repo_id: viola_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.agentview_rgb]
+#  - repo_id: cmu_stretch_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.image]
+#  - repo_id: bc_z_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.image]
+#  - repo_id: berkeley_cable_routing_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.image]
+#
+#  ### Tier 3: Good to have (补充多样性，权重 1.0 即可)
+#  - repo_id: ucsd_kitchen_dataset_lerobot
+#    root: /home/geyuan/datasets/ipec_lerobot/fork/
+#    select_video_keys: [observation.images.image]
+

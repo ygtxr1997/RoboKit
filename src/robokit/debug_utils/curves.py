@@ -255,12 +255,31 @@ def plot_vis_curves(storage: H5CurveStorage,
             vis_step = vis_ol_step
         values = storage.get(key)
         if "ol=True" in key:
-            # 将 (T*D) 转为 (T, D) 然后转置为 (D, T) 再展平为 (D*T)
-            T = len(values)
-            D = 50  # 假设每个时间步有2个维度,根据实际情况调整
-            values = values.reshape(T // D, D).T.flatten()
-        # values = values[::vis_step]
-        values = values[show_start_idx: show_start_idx + show_max_len:vis_step]
+            values = values[show_start_idx: show_start_idx + show_max_len]  # 从 show_start_idx 开始采样
+
+            # 将 (T*D) 转为 (T, D) 然后转置为 (D, T) 再展平为 (D*T), T:seed个数， D:每个seed update steps总数
+            TD = len(values)
+            D = 50  # 每个 setting 测试次数
+            T = TD // D  # seed 个数
+            values = values.reshape(T, D).T  # (D,T)
+
+            mean_wrt_steps = values.mean(axis=1)  # (D,)
+            values = mean_wrt_steps  # (D,)
+        elif "ol=False" in key:
+            # TD = len(values)
+            # values = values.reshape(vis_ol_step, TD // vis_ol_step)  # (num_seeds, num_updates)
+            # mean_wrt_steps = values.mean(axis=0)  # (num_updates,)
+            # values = mean_wrt_steps  # (num_updates,)
+            ## Only show the first num_seeds
+            values = values[show_start_idx: show_start_idx + show_max_len]
+
+            TD = show_max_len
+            D = 50  # 每个 setting 测试次数
+            T = TD // D  # seed 个数
+
+            values = values.reshape(T, D).T  # (D,T)
+            values = values.mean(axis=1)  # (D,)
+
         if values is None:
             print(f"Warning: Key '{key}' not found, skipping.")
             continue

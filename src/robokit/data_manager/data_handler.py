@@ -1,5 +1,5 @@
 import warnings
-from typing import List
+from typing import List, Union, Tuple, Optional, Any
 import numpy as np
 import pickle
 from PIL import Image
@@ -250,65 +250,101 @@ class ForkedDataSaver:
 
 class ImageAsVideoSaver:
     def __init__(self, buffer_size=10, frame_rate=30, width=640, height=480,
-                 save_dir="./output", save_fn="output_video.mp4"):
+                 save_dir="./output", save_fn="output_video.mp4",
+                 n_cameras: int = 1,
+                 ):
         # 初始化类，设置最大缓存大小、帧率、视频分辨率等
         self.buffer_size = buffer_size
         self.frame_rate = frame_rate
-        self.width = width
-        self.height = height
+        # width 和 height 代表单个视角的尺寸
+        self.single_view_width = width
+        self.single_view_height = height
 
         self.save_dir = save_dir
         self.save_fn = save_fn
         self.save_times = 0
 
-        # 使用队列来存储图像
+        # Multi-view related
+        self.n_cameras = n_cameras
+        # 最终视频的宽度是所有视角拼接后的总宽度
+        self.total_width = self.single_view_width * self.n_cameras
+
+        # 使用队列来存储拼接后的图像帧
         self.image_queue = deque(maxlen=self.buffer_size)
 
-    def add_image(self, image_RGB: np.ndarray):
+    def add_image(self, images_RGB: Union[List[np.ndarray], Tuple[np.ndarray]]):
         """
-        向队列中添加图像
-        :param image: 要添加到视频队列中的图像，应该是 numpy 数组形式
+        向队列中添加一帧（可能由多个视角拼接而成）。
+        :param images_RGB: 包含n_cameras个图像的列表或元组，每个图像都是numpy数组形式。
         """
-        image = cv2.cvtColor(image_RGB, cv2.COLOR_RGB2BGR)
-        # 确保图像大小为 (height, width, channels)，并且图像是 BGR 格式
-        if image.shape[0] != self.height or image.shape[1] != self.width:
-            image = cv2.resize(image, (self.width, self.height))
+        assert len(images_RGB) == self.n_cameras, \
+            f"需要 {self.n_cameras} 个视角的图像, 但收到了 {len(images_RGB)} 个。"
 
-        self.image_queue.append(image)
+        processed_images = []
+        for image_RGB in images_RGB:
+            # 转换颜色空间
+            image = cv2.cvtColor(image_RGB, cv2.COLOR_RGB2BGR)
+            # 确保每个图像的大小符合单个视角的尺寸
+            if image.shape[0] != self.single_view_height or image.shape[1] != self.single_view_width:
+                image = cv2.resize(image, (self.single_view_width, self.single_view_height))
+            processed_images.append(image)
 
-        # Save to a temporary video if buffer is full
+        # 在宽度维度上拼接图像
+        concatenated_image = cv2.hconcat(processed_images)
+        self.image_queue.append(concatenated_image)
+
+        # 如果缓冲区已满，则保存为临时视频
         if len(self.image_queue) >= self.buffer_size:
             self.save_to_video()
             self.clear_buffer()
 
-    def add_video(self, image_T_HWC: np.ndarray):
+    def add_video(self, image_VT_H_W_C: np.ndarray):
         """
-        向队列中批量添加图像序列
-        :param image_T_HWC: 要添加到视频队列中的图像序列，应该是 numpy 数组形式，形状为 (T, H, W, C)
+        向队列中批量添加多视角图像序列。
+        :param image_VT_H_W_C: 图像序列，形状为 (V*T, H, W, C)，T是时间步, V是视角数。
         """
-        assert image_T_HWC.ndim == 4, "Input video must be a 4D numpy array (T, H, W, C)"
-        for img in image_T_HWC:
-            self.add_image(img)
+        assert image_VT_H_W_C.ndim == 4, "输入视频必须是5维numpy数组 (V*T, H, W, C)"
+        assert image_VT_H_W_C.shape[0] % self.n_cameras == 0, \
+            f"视频的视角数 ({image_VT_H_W_C.shape[0]}) 与 n_cameras ({self.n_cameras}) 不匹配。"
 
-    def save_to_video(self, path: str = None):
+        # 将 (V*T, H, W, C) 拆分为 V 个 (T, H, W, C) 的数组列表
+        # 每个元素代表一个视角的完整视频序列
+        video_per_camera = np.split(image_VT_H_W_C, self.n_cameras)
+
+        # 获取时间步长 T
+        num_timesteps = video_per_camera[0].shape[0]
+
+        # 遍历每个时间步
+        for t in range(num_timesteps):
+            # 在当前时间步 t，从每个视角提取一帧图像
+            multi_view_images_at_t = [
+                video_per_camera[v][t] for v in range(self.n_cameras)
+            ]
+            # 调用 add_image 处理并添加这一组（拼接后的）图像
+            self.add_image(multi_view_images_at_t)
+
+    def save_to_video(self, path: str = None, suffix: str = None):
         """
-        将队列中的图像保存为视频
-        :param path: 保存视频的路径（例如: 'output.avi'）
+        将队列中的图像保存为视频。
+        :param path: 保存视频的路径（例如: 'output.mp4'）
         """
         if len(self.image_queue) == 0:
-            print("No images in the queue to save.")
+            print("队列中没有图像可供保存。")
             return
 
         if path is None:
             os.makedirs(self.save_dir, exist_ok=True)
             save_fn = self.save_fn.replace('.mp4', f'_{self.save_times:03d}.mp4')
             path = os.path.join(self.save_dir, save_fn)
+        if suffix is not None:
+            suffix = suffix.replace(' ', '_')
+            path = path.replace('.mp4', f'_{suffix}.mp4')
 
         # 获取视频的编码器
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 
-        # 创建 VideoWriter 对象
-        out = cv2.VideoWriter(path, fourcc, self.frame_rate, (self.width, self.height))
+        # 创建 VideoWriter 对象，使用拼接后的总宽度
+        out = cv2.VideoWriter(path, fourcc, self.frame_rate, (self.total_width, self.single_view_height))
 
         # 写入图像队列中的每一帧
         for img in self.image_queue:
@@ -317,7 +353,7 @@ class ImageAsVideoSaver:
         # 释放 VideoWriter
         out.release()
         self.save_times += 1
-        print(f"[ImageAsVideoSaver] Video saved at {path}")
+        print(f"[ImageAsVideoSaver] 视频已保存至 {path}")
 
     def clear_buffer(self):
         """清空图像缓存"""
