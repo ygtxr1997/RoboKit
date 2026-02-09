@@ -11,6 +11,7 @@ from robokit.data_manager.realsense_handler import RealsenseHandler
 from robokit.data_manager.ft300_handler import FT300Handler
 from robokit.data_manager.data_handler import DataHandler, ImageAsVideoSaver, ActionAsVideoSaver
 from robokit.debug_utils.images import concatenate_rgb_images
+from robokit.debug_utils.times import time_stat
 
 
 class RealWorldEvaluator:
@@ -27,6 +28,8 @@ class RealWorldEvaluator:
                  enable_auto_ae_wb: bool = True,
                  buffer_size: int = 1,
                  speed_scale: float = 0.75,
+                 go_home_at_begin: bool = True,
+                 reset_remote_api_at_begin: bool = True,
                  # Save as video
                  image_save_speedup: float = 2.0,
                  image_save_fn: str = "tmp_saved_video.mp4",
@@ -39,6 +42,8 @@ class RealWorldEvaluator:
         self.img_hw = img_hw
         self.connector.resize_hw = resize_hw
         self.future_skip = future_skip
+        self.go_home_at_begin = go_home_at_begin
+        self.reset_remote_api_at_begin = reset_remote_api_at_begin
         self.start_time = time.time()
 
         # Cameras
@@ -53,11 +58,7 @@ class RealWorldEvaluator:
         if not enable_auto_ae_wb:
             self.camera.set_ae_wb(exposure=50)
 
-        # Force Sensor
-        self.ftsensor = FT300Handler()
-        if not self.ftsensor.connect(calibrate_samples=200):
-            print("Failed to connect force torque sensor")
-            exit()
+        self.ftsensor = None  # create and calibrate after go_home in run()
 
         self.speed_scale = speed_scale
 
@@ -139,8 +140,15 @@ class RealWorldEvaluator:
         cur_task_text = self.cur_task_text
         buffer_size = self.buffer_size
         self.reset()
-        self.connector.init_socket(cur_task_text)
-        self.connector.send_reset(cur_task_text)
+        if self.reset_remote_api_at_begin:
+            self.connector.init_socket(cur_task_text)
+            self.connector.send_reset(cur_task_text)
+
+        # Force Sensor
+        self.ftsensor = FT300Handler()
+        if not self.ftsensor.connect(calibrate_samples=200):
+            print("Failed to connect force torque sensor")
+            exit()
 
         for _ in tqdm(range(100), desc="Skipping frames:"):
             self.capture_env_observation()
@@ -246,6 +254,11 @@ class RealWorldEvaluator:
             #         if action[h, 2] < 0.:
             #             action[h, 2] = 0.7 * action[h, 2]
 
+            ## Disable rotation at `x` and `y` axis
+            # for h in range(action[0].shape[0]):
+            #     action[0, h, 3] = 0.
+            #     action[0, h, 4] = 0.
+
             # 4. Conduct action in real-world environment, FPS control
             current_time = time.time()
             cycle_elapsed = current_time - cycle_start_time  # 本轮已用时间
@@ -268,8 +281,9 @@ class RealWorldEvaluator:
             print("[Info]", self.step_cnt, self.format_array(action), "\n",
                   self.format_array(np.array(cur_joint_state)), cur_task_text[:20])
 
-            self.step(action_D=action[0, 0, :])
-            self.on_gripper_move()
+            with time_stat("Robot Action Execution"):
+                self.step(action_D=action[0, 0, :])
+                self.on_gripper_move()
             self.action_saver.add_action(action[0, 0, :])
 
             execution_time = time.time() - execution_start
@@ -278,6 +292,7 @@ class RealWorldEvaluator:
             # Robot arm conducting delay
             self.time_tok()
             self.step_cnt += 1
+            time_stat.print_stats()
 
             if self.step_cnt >= self.run_loops:
                 break  # Finished
@@ -290,8 +305,9 @@ class RealWorldEvaluator:
         return np.array2string(arr, formatter={'float_kind': lambda x: f"{x:.6f}"})
 
     def capture_env_observation(self) -> dict:
-        camera_data = self.camera.capture_frames()
-        robot_data = self.robot.get_current_frame_info()
+        # camera_data = self.camera.capture_frames()
+        robot_data_time = time.time()
+        robot_data = self.robot.get_current_frame_info()  # very fast
 
         frame_robot_obs = np.array([
             robot_data['tcp_xyz_wrt_base']['x'],
@@ -310,11 +326,15 @@ class RealWorldEvaluator:
             robot_data['gripper_moving_to'],
         ])  # shape:(14,)
 
-        ft_data = self.ftsensor.read_ft()  # (fx, fy, fz, mx, my, mz)
-        frame_force = np.array([
-            ft_data[0], ft_data[1], ft_data[2],
-            ft_data[3], ft_data[4], ft_data[5],
-        ])  # (6,)
+        with time_stat("Force Sensor"):
+            ft_data = self.ftsensor.read_ft()  # (fx, fy, fz, mx, my, mz)
+            frame_force = np.array([
+                ft_data[0], ft_data[1], ft_data[2],
+                ft_data[3], ft_data[4], ft_data[5],
+            ])  # (6,)
+
+        with time_stat("Multi-view Cameras"):
+            camera_data = self.camera.capture_frames()
 
         env_obs_dict = {
             "primary_rgb": camera_data['color1'],
@@ -371,7 +391,8 @@ class RealWorldEvaluator:
         time.sleep(1.5)
 
         # Go back home
-        self.robot.joint_back_home()
+        if self.go_home_at_begin:
+            self.robot.joint_back_home()
 
     def stop(self):
         ## Just for coffee task

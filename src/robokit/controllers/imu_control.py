@@ -167,6 +167,12 @@ class RawIMUHandler:
         self.state = {'ax': 0, 'ay': 0, 'az': 0, 'gx': 0, 'gy': 0, 'gz': 0}
         self.state_converted = copy.deepcopy(self.state)
 
+        # Position (XYZ) related
+        self.xyz_last = np.array([0, 0, 0])  # last position, output by get_latest_position()
+        self.xyz_now = np.array([0, 0, 0])   # current position
+        self.xyz_rel = np.zeros(3)  # xyz_now <- xyz_last + xyz_rel
+
+        # Rotation (RPY) related
         self.q_last = np.array([1.0, 0.0, 0.0, 0.0])  # last pose, output by get_latest_euler()
         self.q_now = np.array([1.0, 0.0, 0.0, 0.0])   # current pose
         self.q_real = np.array([1.0, 0.0, 0.0, 0.0])  # filtered current pose, but filter is not used for now
@@ -179,6 +185,7 @@ class RawIMUHandler:
         # Multiprocessing related
         self._reset_evt = mp.Event()
         self._acquire_euler_evt = mp.Event()
+        self._position_arr = mp.Array('d', 6)  # 共享位置（xyz_now, xyz_rel）
         self._euler_arr = mp.Array('d', 6)  # 共享欧拉角（rpy_real, rpy_rel）
         self._quat_arr = mp.Array('d', 4)  # 共享四元数（q_real）
         self._imu_arr = mp.Array('d', 6)  # shared IMU data_manager (6 doubles)
@@ -197,6 +204,10 @@ class RawIMUHandler:
         self._process.start()
 
     def _init_state(self):
+        self.xyz_last = np.array([0, 0, 0])
+        self.xyz_now = np.array([0, 0, 0])
+        self.xyz_rel = np.zeros(3)
+
         # 原始积分相关
         self.q_last = np.array([1.0, 0.0, 0.0, 0.0])
         self.q_now = np.array([1.0, 0.0, 0.0, 0.0])
@@ -213,6 +224,8 @@ class RawIMUHandler:
 
         # 清空共享内存
         with self._lock:
+            for i in range(6):
+                self._position_arr[i] = 0.0
             for i in range(6):
                 self._euler_arr[i] = 0.0
             for i in range(4):
@@ -275,6 +288,10 @@ class RawIMUHandler:
 
                         if self.t_prev is not None:
                             dt = t_now - self.t_prev
+                            # For position: 加速度积分得到速度变化，速度积分得到位置变化
+                            self.xyz_now = acc  # NotUsed: just for visualization debug
+
+                            # For rotation: 角速度积分得到姿态变化
                             omega = gyro * dt  # rad
 
                             angle = np.linalg.norm(omega)
@@ -307,6 +324,8 @@ class RawIMUHandler:
                 self._init_state()
 
             if self._acquire_euler_evt.is_set():
+                # NotUsed: Set: xyx_last
+                self.xyz_last = None
                 # Calculate: rpy_rel
                 # Set: q_last
                 self._acquire_euler_evt.clear()
@@ -316,7 +335,15 @@ class RawIMUHandler:
 
             self.capture_imu_pose()
 
+            # Write to shared memory
             with lock:
+                self._position_arr[0] = self.xyz_now[0]
+                self._position_arr[1] = self.xyz_now[1]
+                self._position_arr[2] = self.xyz_now[2]
+                self._position_arr[3] = self.xyz_rel[0]
+                self._position_arr[4] = self.xyz_rel[1]
+                self._position_arr[5] = self.xyz_rel[2]
+
                 self._euler_arr[0] = self.rpy_real[0]
                 self._euler_arr[1] = self.rpy_real[1]
                 self._euler_arr[2] = self.rpy_real[2]
@@ -346,6 +373,7 @@ class RawIMUHandler:
             return {
                 'euler': np.array(self._euler_arr[:]),
                 'quat': np.array(self._quat_arr[:]),
+                'position': np.array(self._position_arr[:]),
             }
 
     def get_latest_imu(self):
