@@ -8,6 +8,7 @@ from PIL import Image
 
 from robokit.connects.protocols import StepRequestFromEvaluator, StepRequestFromPolicy
 from robokit.data_manager.utils_multiview import cat_multiview_video_with_another
+from robokit.debug_utils.times import time_stat
 
 
 class ServiceConnector:
@@ -16,16 +17,19 @@ class ServiceConnector:
             base_url: str = "http://localhost:6060",
             resize_hw: tuple = None,
             max_cache_actions: int = 28,
+            close_online: bool = True,
     ):
         self.base_url = base_url
         self.http_session = requests.Session()
         self.resize_hw = resize_hw
+        self.close_online = close_online
 
         # Dynamic
         self.max_cache_actions = max_cache_actions
         self.task_instruction = None
         self.send_cnt = 0
         self.cache_actions_B_T_D = None
+        self.stage_flag = 0  # 0:cold start, 1:hot start
 
         print(f"[ServiceConnector] session created: {base_url}")
 
@@ -35,6 +39,8 @@ class ServiceConnector:
         resp = resp.json()
 
         max_cache_action = resp["max_cache_action"]
+        if isinstance(max_cache_action, list):
+            max_cache_action = max_cache_action[0]
         self.max_cache_actions = min(max_cache_action, self.max_cache_actions)
         self.send_cnt = 0
         self.cache_actions_B_T_D = None
@@ -47,6 +53,8 @@ class ServiceConnector:
         resp = resp.json()
 
         max_cache_action = resp["max_cache_action"]
+        if isinstance(max_cache_action, list):
+            max_cache_action = max_cache_action[0]
         self.max_cache_actions = min(max_cache_action, self.max_cache_actions)
         self.send_cnt = 0
 
@@ -90,17 +98,18 @@ class ServiceConnector:
 
             request_to_policy = StepRequestFromEvaluator.encode_from_raw(
                 instruction=task_description,
-                stage_flag=0,
+                stage_flag=self.stage_flag,  # NOTE: ori:0
                 gt_video=gt_video,
                 tcp_state=joint_state,
             )
 
             sending_dict = request_to_policy.model_dump(mode="json")
-            response = self.http_session.post(
-                f"{self.base_url}/step",
-                json=sending_dict
-            )
-            response.raise_for_status()
+            with time_stat("GPU Inference"):
+                response = self.http_session.post(
+                    f"{self.base_url}/step",
+                    json=sending_dict
+                )
+                response.raise_for_status()
 
             response = response.json()
             raw_actions = StepRequestFromPolicy(action=response["action"]).decode_to_raw()["action"]  # (B,H,7）
@@ -113,6 +122,8 @@ class ServiceConnector:
         ret_actions = np.array(ret_actions)[:, None]  # [B,D] -> (B,1,D)
 
         self.send_cnt += 1
+        if not self.close_online:
+            self.stage_flag = 1  # hot start
         return ret_actions
 
     @staticmethod

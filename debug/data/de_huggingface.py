@@ -22,9 +22,23 @@ upload_fns = [
 
     # "1017_sweep_bean.zip",
     # "1024_sweep_bean.zip",
-    "1024_eggs_pick_place.zip",
-    "1024_pour_water.zip",
+    # "1024_eggs_pick_place.zip",
+    # "1024_pour_water.zip",
     # "1024_wipe_white_board.zip"
+    # "1117_red_peper_pick_place.zip",
+    # "1117_carrot_pick_place.zip",
+
+    # "1201_wipe_blackboard.zip",
+    # "1201_pour_water.zip",
+    # "1201_banana.zip",
+    # "1201_pepper.zip",
+    # "1201_pot.zip",
+    # "1201_coffee.zip",
+
+    # "1201_screw_bulb.zip",
+    # "1201_screw_bulb_turn_off.zip",
+
+    "0209_tower_boby.zip",
 ]
 
 for upload_fn in upload_fns:

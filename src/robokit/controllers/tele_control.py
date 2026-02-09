@@ -11,7 +11,7 @@ from robokit.robots.robot_client_inovo import RobotClient
 from robokit.controllers.imu_control import RawIMUHandler
 from robokit.data_manager.data_handler import ForkedDataSaver
 from robokit.data_manager.realsense_handler import RealsenseHandler
-from robokit.data_manager.ft300_handler import FT300Handler
+from robokit.data_manager.ft300_handler import FT300ModbusStream
 
 
 class GameState(enum.Enum):
@@ -59,6 +59,9 @@ class BaseController:
         self.robot.gripper_set_pub(0)
         time.sleep(0.5)
 
+        # Back to home
+        self.on_back_home()
+
         self.game_state = GameState.INIT
 
         # Cameras
@@ -74,7 +77,7 @@ class BaseController:
             for ae_wb_param in self.ae_wb_params:
                 self.camera.set_ae_wb(**ae_wb_param)
 
-        self.ftsensor = FT300Handler()
+        self.ftsensor = FT300ModbusStream()
         if not self.ftsensor.connect(calibrate_samples=200):
             print("Failed to connect force torque sensor")
             exit()
@@ -177,7 +180,7 @@ class BaseController:
                     elif self.is_angular_jog_pressed():
                         self.on_angular_jog()
                     else:
-                        self.on_linear_jog(zero_xyz)
+                        self.on_linear_jog(zero_xyz, z_39=0.)
                         self.on_angular_jog(zero_xyz, z_39=0.)
 
                     # Check Gripper
@@ -363,7 +366,7 @@ class BaseController:
         elif self.game_state == GameState.PAUSED:
             self.game_state = GameState.RUNNING
 
-    def on_linear_jog(self, xyz: dict = None) -> None:
+    def on_linear_jog(self, xyz: dict = None, z_39: float = None) -> None:
         self.linear_xyz = xyz if xyz is not None else self.linear_xyz
         scaled_xyz = {k: v * self.linear_scale for k, v in self.linear_xyz.items()}
         self.robot.linear_jog_pub(scaled_xyz)
@@ -541,12 +544,16 @@ class PS5DualSenseController(BaseController):
         PS5DualSense (Ubuntu)
         Left Stick 0639:    A1, A1, A0, A0
         Right Stick 0639:   A4, A5, A3, A3
-        A, B, X, Y:          1,  0,  2,  3
+        A(◯), B(✕), X(△), Y(□):          1,  0,  2,  3
         LB/L1, RB/R1:        4,  5,
         LT/L2, RT/R2:        6,  7,
         screen:              8,
         menu:                9,
         share:              10,
+        ↑:                  Hat0 ( 0, 1)
+        ↓:                  Hat0 ( 0,-1)
+        ←:                  Hat0 (-1, 0)
+        →:                  Hat0 ( 1, 0)
         """
         self.joystick_idx = joystick_idx
         self.joystick = pygame.joystick.Joystick(joystick_idx)
@@ -561,6 +568,16 @@ class PS5DualSenseController(BaseController):
         if abs(demand) < axis_eps:
             demand = 0  # Applying dead band to avoid drift when joystick is released
         return demand
+
+    def get_hat(self, hat_idx: int = 0):
+        hat_val = self.joystick.get_hat(hat_idx)  # returns (x, y)
+        hat_to_direction = {
+            (0, 1): 'up',
+            (0, -1): 'down',
+            (-1, 0): 'left',
+            (1, 0): 'right',
+            (0, 0): 'center'
+        }
 
     def update_state(self):
         pass  # do nothing
@@ -588,32 +605,31 @@ class PS5DualSenseController(BaseController):
         return self.joystick.get_button(10)
 
     def get_back_home_button(self):
-        return 0
+        return 0  # `B` or `✕`
 
     def get_pause_button(self):
-        return 9  # button number
+        return 9  # `menu`
 
     def get_angular_button(self):
-        return 4
+        return 4  # `L1`
 
     def is_linear_jog_pressed(self):
-        return self.joystick.get_button(5)
+        return self.joystick.get_button(5)  # `R1`
 
     def is_angular_jog_pressed(self):
-        return self.joystick.get_button(4)
+        return self.joystick.get_button(4)  # `L1`
 
     def get_start_episode_button(self) -> int:
-        return 2
+        return 2  # `X` or `△`
 
     def get_end_episode_button(self) -> int:
-        return 3
+        return 3  # `Y` or `□`
 
     def on_rumble(self, low_freq=0.2, high_freq=0.4, duration=100) -> None:
         self.joystick.rumble(low_freq, high_freq, duration)
 
     def on_large_force_detected(self, force_val: float) -> None:
-        # return  # disable rumble for FT300
-        # print("[DEBUG] force_val:", force_val)
+        # Map force_val to rumble intensity
         large_threshold = -3
         force_val = large_threshold - force_val
         if force_val > 0:
@@ -629,27 +645,47 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         PS5DualSenseController.__init__(self, robot, joystick_idx=joystick_idx,
                                      saving_root=saving_root, **kwargs)
         self.imu_controller = RawIMUHandler()
-        self.angular_scale = .35  # fps20:0.2, fps30:0.4
+        self.angular_scale = .4  # fps20:0.2, fps30:0.4, now:0.35
 
     def update_xyz(self):
 
         x = -self.get_joy_axis(0)
         y = self.get_joy_axis(1)
         z = -self.get_joy_axis(4)
+        z_39 = -self.get_joy_axis(3)
         # print("DEBUG|| xyz," + str(x) + "," + str(y) + "," + str(z))
         self.linear_xyz = {'x': x, 'y': y, 'z': z}
+        self.z_39 = z_39
+
+    def on_linear_jog(self, xyz: dict = None, z_39: float = None) -> None:
+        self.linear_xyz = xyz if xyz is not None else self.linear_xyz
+        euler_data = self.imu_controller.get_latest_euler()
+        rpy_rel = euler_data['euler'][3:6]
+        roll, pitch, yaw = rpy_rel
+        yaw = z_39 if z_39 is not None else yaw  # will be set as zero if no button pressed
+        self.angular_xyz = {'x': 0., 'y': 0., 'z': yaw}
+        # ''' (Optional) Disable z and z_39 moving simultaneously '''
+        # if abs(self.linear_xyz['z']) - abs(self.angular_xyz['z']) >= -1e-6:
+        #     self.angular_xyz['z'] = 0.
+        # else:
+        #     self.linear_xyz['z'] = 0.
+        scaled_linear_xyz = {k: v * self.linear_scale for k, v in self.linear_xyz.items()}
+        scaled_angular_xyz = {k: v * self.angular_scale for k, v in self.angular_xyz.items()}
+
+        self.robot.lin_ang_jog_pub(linear_message=scaled_linear_xyz, angular_message=scaled_angular_xyz)
 
     def on_angular_jog(self, xyz: dict = None, z_39: float = None) -> None:
         """ Also let linear axes move """
         linear_scaled_xyz = {k: v * self.linear_scale for k, v in self.linear_xyz.items()}
 
+        ''' Angular jog '''
         # Only need to obtain angular_xyz when moving
         euler_data = self.imu_controller.get_latest_euler()
         # rpy_now = euler_data['euler'][:3]
         rpy_rel = euler_data['euler'][3:6]
         roll, pitch, yaw = rpy_rel
         self.angular_xyz = {'x': -roll, 'y': -pitch, 'z': yaw}
-        self.z_39 = 0.
+        self.z_39 = 0.  # disable z_39 for imu control
 
         self.angular_xyz = xyz if xyz is not None else self.angular_xyz
         self.z_39 = z_39 if z_39 is not None else self.z_39
@@ -667,7 +703,7 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         #     if np.random.uniform() > 0.9:
         #         scaled_xyz[k] = v + float(np.random.randn(1)) * np.random.uniform(0.01, 0.04)
 
-        self.robot.lin_ang_jog_pub(linear_scaled_xyz, scaled_xyz)
+        self.robot.lin_ang_jog_pub(linear_message=linear_scaled_xyz, angular_message=scaled_xyz)
 
     def on_angular_button_released(self):
         self.imu_controller.reset_pose()

@@ -28,6 +28,14 @@ task_instructions = [
     "Pick up the measuring cup and pour the water into a glass.",
     # [8] Wipe
     "Wiping the writing on the whiteboard.",
+    # [9] Red Pepper
+    "Pick up the red pepper on the box, and then place it into a cup.",
+    # [10] Carrot
+    "Pick up the carrot from a plate, and then place it into a bowl.",
+    # [11] Screw Bulb
+    "Screw the bulb into the light socket, and turn on the light.",
+    # [12] Screw Bulb Turn Off
+    "Screw the bulb into the light socket, and turn off the light after the bulb is on."
 ]
 
 
@@ -50,7 +58,8 @@ def main(opts):
     print("[Info] Using task:", task_instructions[opts.task])
     gpu_connector = ServiceConnector(
         base_url=test_url,
-        max_cache_actions=32,
+        max_cache_actions=30,
+        close_online=not opts.open_online,
     )
     evaluator = RealWorldEvaluator(
         gpu_service_connector=gpu_connector,
@@ -58,12 +67,14 @@ def main(opts):
         cur_task_text=task_instructions[opts.task],
         run_loops=5000,
         img_hw=(480, 848),  # ori:(480, 848)
-        resize_hw=(16*10, 16*15),  # ori:(16*7, 16*10), now:(16*10, 16*15)
+        resize_hw=(16*7, 16*10),  # k1:(16*7, 16*10), k8:(16*8, 16*12), dp:(240, 320)
         buffer_size=1,  # ori:1
         enable_auto_ae_wb=True,
-        fps=20,  # ori:30
+        fps=30,  # ori:30
         speed_scale=1.,
         action_save_flag=opts.action_save_flag,
+        go_home_at_begin=not opts.no_home,
+        reset_remote_api_at_begin=not opts.no_reset,
     )  # TODO: better AE-WB setting
     try:
         evaluator.run()
@@ -91,6 +102,9 @@ if __name__ == "__main__":
     args.add_argument("-p", "--port", default=5880, type=int, help="Port number of GPU connects")
     args.add_argument("-t", "--task", default=-1, type=int, help="Index of task")
     args.add_argument("-a", "--action_save_flag", default=False, action="store_true", help="Action save flag")
-    args.add_argument("-k", "--future_skip", default=1, type=int, help="Skip for future frames")
+    args.add_argument("-k", "--future_skip", default=1, type=int, help="Skip for future frames (not supported yet)")
+    args.add_argument("--no_home", action="store_true", help="No home at the beginning")
+    args.add_argument("--no_reset", action="store_true", help="Not reset remote GPU model at the beginning")
+    args.add_argument("--open_online", action="store_true", help="Open online update (set stage_flag=1)")
     args = args.parse_args()
     main(args)

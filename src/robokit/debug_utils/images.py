@@ -1,6 +1,6 @@
 from abc import abstractmethod, ABC
 import math
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Iterable
 
 import numpy as np
 from PIL import Image
@@ -328,7 +328,7 @@ def plot_force_sensor_wrt_time(sensor_data: np.ndarray):
 
 class DynamicDataDrawer(ABC):
     def __init__(self, data_provider, data_keys: List[List[str]], max_points: int = 1000,
-                 y_minmax_values: List[List[float]] = None):
+                 y_minmax_values: List[Iterable[float]] = None):
         self.data_provider = data_provider
         self.data_keys_grouped = data_keys  # 二维列表
         self.max_points = max_points
