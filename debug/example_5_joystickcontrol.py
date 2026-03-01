@@ -19,7 +19,7 @@ try:
   client = roslibpy.Ros(host='192.168.1.7', port=9090) # Change host to the IP of the robot
   client.run()
 except:
-  print("Cannot connect to the robot, check your IP addess and network connection")
+  print("Cannot connect to the robot, check your IP addess and robots connection")
   exit()
 
 # Sanity check to see if we are connected

@@ -37,9 +37,9 @@ class DataCollector:
         self.max_count = 400
         self.save_interval = 0.5  # seconds
 
-    # def image_callback(self, data):
+    # def image_callback(self, data_manager):
     #     # try:
-    #     #     self.image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+    #     #     self.image = self.bridge.imgmsg_to_cv2(data_manager, "bgr8")
     #     # except Exception as e:
     #     #     print(e)
     #     frames = pipeline.wait_for_frames()
@@ -47,8 +47,8 @@ class DataCollector:
     #     # 将图像转换为numpy数组
     #     self.color_image = np.asanyarray(color_frame.get_data())
 
-    # def pose_callback(self, data):
-    #     self.pose = data
+    # def pose_callback(self, data_manager):
+    #     self.pose = data_manager
 
     def save_data(self):
         os.makedirs("exp10", exist_ok=True)

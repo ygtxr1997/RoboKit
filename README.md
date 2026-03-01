@@ -9,6 +9,37 @@ git clone https://github.com/ygtxr1997/RoboKit.git
 cd RoboKit
 pip install -e .
 ```
+## Remote control process on PS5 console
+### 1. Check the realsense d455 camera with 
+```shell
+realsense-viewer
+```
+### 2. Initialize the FT300 sensor with
+```shell
+/home/geyuan/driver/Linux/bin/driverSensor
+```
+
+If there is no response for driverSensor, you can check the FT sensor connection with
+```shell
+sudo dmesg | grep ttyUSB
+```
+
+### 3. Run data collection function in "rs" virtual env with
+```shell
+python scripts/00_collect_teleop_data.py 
+```
+
+### 4. Buttons for PS5 console
+Keep the console still when starting to calibrate the IMU noise.
+ - Triangle button to start recording.
+ - Square button to stop recording.
+ - Cross button to set the gripper to home position.
+ - LB to activate the xyz controlling with IMU.
+ - RB to activate the xyz controlling without IMU.
+ - RT to close the gripper.
+ - L joy stick to x-y plan move.
+ - R joy stick to z axis move.
+ - The remote control player coordinate is established on the view of fix camera for current experiment on Oct. 9th, 2025.
 
 ## Data Format
 
@@ -30,7 +61,7 @@ python tests/test_data_format.py -R "YOUR_PATH_TO_DATA_ROOT/"
 
 The output could be:
 ```shell
-737-th data:: Dict,keys=dict_keys(['primary_rgb', 'gripper_rgb', 'primary_depth', 'gripper_depth', 'language_text', 'actions', 'rel_actions', 'robot_obs'])
+737-th data_manager:: Dict,keys=dict_keys(['primary_rgb', 'gripper_rgb', 'primary_depth', 'gripper_depth', 'language_text', 'actions', 'rel_actions', 'robot_obs'])
 primary_rgb,<class 'numpy.ndarray'>,shape=(480, 848, 3)
 gripper_rgb,<class 'numpy.ndarray'>,shape=(480, 848, 3)
 primary_depth,<class 'numpy.ndarray'>,shape=(480, 848)
@@ -56,10 +87,10 @@ About `robot_obs`:
 
 ```shell
 # In your .py file, to use TCLDataset provided by robokit
-from robokit.data.tcl_datasets import TCLDataset
+from robokit.data_manager.tcl_datasets import TCLDataset
 
 my_tcl_dataset = TCLDataset(
-  root="YOUR_PATH_TO_DATA_ROOT/",  # data root
+  root="YOUR_PATH_TO_DATA_ROOT/",  # data_manager root
   use_extracted=True,  # load `rel_actions` from a single npy file rather than load several npz files
   load_keys=["rel_actions", "primary_rgb", "gripper_rgb", "robot_obs", "language_text"],
   # default (None) will load all keys: ["primary_rgb", "gripper_rgb", "primary_depth", "gripper_depth", "language_text", "actions", "rel_actions", "robot_obs"]

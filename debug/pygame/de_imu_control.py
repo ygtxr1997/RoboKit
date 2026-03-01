@@ -4,7 +4,7 @@ from pygame.locals import DOUBLEBUF, OPENGL, QUIT, KEYDOWN, K_SPACE, K_m
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
-from robokit.network.imu_control import RawIMUHandler
+from robokit.controllers.imu_control import RawIMUHandler
 
 
 imu_controller = RawIMUHandler()

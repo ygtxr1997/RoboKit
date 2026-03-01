@@ -1,6 +1,7 @@
 import time
 from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
+from robokit.debug_utils.printer import print_batch
 
 
 def dataloader_speed_test(dataset: Dataset, batch_size=64, num_workers=8, num_batches=1000):
@@ -22,6 +23,8 @@ def dataloader_speed_test(dataset: Dataset, batch_size=64, num_workers=8, num_ba
 
     # 在 loader 上包一层 tqdm
     for batch_data in tqdm(loader, total=total_iters, desc=desc):
+        if total_batches == 0:
+            print_batch("batch_data@0", batch_data)
         total_batches += 1
         # 如果有 GPU 拷贝需求可以取消以下注释
         # _ = images.cuda(non_blocking=True)

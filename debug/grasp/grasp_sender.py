@@ -21,7 +21,7 @@ class GraspPoseSender(object):
 
     def run(self, objects):
         """
-        Example data:
+        Example data_manager:
         objects = [
             {
                 "name": "圆柱",
