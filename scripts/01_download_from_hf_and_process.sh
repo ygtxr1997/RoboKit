@@ -36,7 +36,9 @@ FILE_NAMES=(
 #"1201_coffee"
 #"1201_screw_bulb"
 #"1201_screw_bulb_turn_off"
-"0209_tower_boby"
+#"0209_tower_boby"
+#"0209_tower_boby_hard"
+"0209_tower_boby_easy"
 )
 
 # 路径配置

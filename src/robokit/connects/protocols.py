@@ -27,6 +27,7 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
     gt_video: List[List[str]]  # len1=B, len2=V*Ts (V:#camera_views, Ts>=v1), each str is base64 of (H,W,rgb)
     num_camera_views: int = 1  # V, default=1
     tcp_state: Optional[List[List[List[float]]]] = None # len1=B, len2=Ts, len3=D, float32
+    max_cache_action: int = None  # notified by the evaluator
 
     def decode_to_raw(self) -> Dict[str, Any]:
         def base64_to_image_H_W_C(img_base64: str) -> np.ndarray:
@@ -46,6 +47,55 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
             "gt_video": gt_video_B_T_H_W_C,
             "num_camera_views": self.num_camera_views,
             "tcp_state": tcp_state_B_T_D,
+            "max_cache_action": self.max_cache_action
+        }
+
+    def decode_to_raw_buffer(self, out_video_buffer: Optional[np.ndarray] = None) -> Dict[str, Any]:
+        """
+        Decode request to raw numpy arrays.
+        :param out_video_buffer: Optional pre-allocated buffer of shape (B, Ts, H, W, 3) and dtype uint8.
+                                 If provided, data will be written into this buffer in-place.
+        """
+        B = len(self.gt_video)
+        assert B != 0, "len(gt_video) should > 0"
+        T = len(self.gt_video[0])
+        assert T != 0, "len(gt_video[0]) should > 0"
+        print(f"[DEBUG] decode_to_raw_buffer: B={B}, T={T}")
+
+        if out_video_buffer is not None:
+            # 使用外部传入的预分配内存
+            gt_video_B_T_H_W_C = out_video_buffer
+        else:
+            # 兼容未传入 buffer 的情况：嗅探尺寸并临时分配
+            first_img_byte = base64.b64decode(self.gt_video[0][0])
+            with Image.open(io.BytesIO(first_img_byte), formats=["JPEG"]) as img_pil:
+                first_img_np = np.array(img_pil)
+
+            H, W, C = first_img_np.shape
+            gt_video_B_T_H_W_C = np.empty((B, T, H, W, C), dtype=np.uint8)
+            gt_video_B_T_H_W_C[0, 0] = first_img_np
+
+        for b in range(B):
+            for t in range(T):
+                # 如果用户没传 buffer，且是第一帧，说明刚才嗅探时已经写过了，跳过
+                if b == 0 and t == 0 and out_video_buffer is None:
+                    continue
+                img_byte = base64.b64decode(self.gt_video[b][t])
+                with Image.open(io.BytesIO(img_byte), formats=["JPEG"]) as img_pil:
+                    # np.array(img_pil) 会在局部产生一个极小的临时数组
+                    # 随后立即被覆写进巨型预分配内存 gt_video_B_T_H_W_C 中
+                    # 这将大对象的内存分配次数直接降为 0
+                    gt_video_B_T_H_W_C[b, t] = np.array(img_pil)
+
+        tcp_state_B_T_D = None if self.tcp_state is None else np.array(self.tcp_state, dtype=np.float32)
+
+        return {
+            "instruction": self.instruction,
+            "stage_flag": self.stage_flag,
+            "gt_video": gt_video_B_T_H_W_C,
+            "num_camera_views": self.num_camera_views,
+            "tcp_state": tcp_state_B_T_D,
+            "max_cache_action": self.max_cache_action
         }
 
     @classmethod
@@ -55,6 +105,7 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
                         gt_video: np.ndarray,  # (B,Ts,H,W,3) uint8
                         num_camera_views: int = 1,
                         tcp_state: Optional[np.ndarray] = None,  # (B,2) float32
+                        max_cache_action: int = None
                         ) -> 'StepRequestFromEvaluator':
         """
 
@@ -70,7 +121,8 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
             stage_flag=stage_flag,
             gt_video=cls.video_np_to_base64(gt_video),
             num_camera_views=num_camera_views,
-            tcp_state=None if tcp_state is None else tcp_state.tolist()
+            tcp_state=None if tcp_state is None else tcp_state.tolist(),
+            max_cache_action=max_cache_action,
         )
         return instance
 
@@ -81,7 +133,8 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
             stage_flag=0,
             gt_video=np.zeros((1, 10, 240, 320, 3), dtype=np.uint8),
             num_camera_views=1,
-            tcp_state=np.zeros((1, 10, 8), dtype=np.float32)
+            tcp_state=np.zeros((1, 10, 8), dtype=np.float32),
+            max_cache_action=0,
         )
 
     @staticmethod

@@ -1,12 +1,12 @@
 import time
 import os
-from typing import List
+from typing import List, Dict
 import numpy as np
 from PIL import Image
+import torch
 
 from robokit.connects.service_connector import ServiceConnector
 from robokit.robots.robot_client_inovo import RobotClient
-from robokit.data_manager.realsense_handler import RealsenseHandler
 from robokit.data_manager.data_handler import DataHandler
 
 
@@ -34,6 +34,7 @@ class ReplayModel:
     def __init__(self, sleep_duration: int = 100,
                  replay_root: str = None,
                  replay_idx: int = 36,
+                 cache_actions_cnt: int = 10,
                  ):
         self.sleep_duration = sleep_duration
         self.replay_root = replay_root
@@ -50,43 +51,62 @@ class ReplayModel:
 
         # Varying elements
         self.frame_idx = 0
-        self.cache_actions_cnt = 10
+        self.infer_frame_idx = 0
+        self.cache_actions_cnt = cache_actions_cnt
         self.cache_actions = []
         print(f"[ReplayModel] action data loaded: fn={self.replay_task}, len={self.replay_length}")
 
     def __call__(self, *args, **kwargs) -> List[float]:
         start = time.time()
 
-        if self.frame_idx % self.cache_actions_cnt == 0:  # Need reference
-            frame_begin_idx = self.frame_idx
-            frame_end_idx = min(self.frame_idx + self.cache_actions_cnt, self.replay_length)
-            self.cache_actions = []  # reset
-            for f_idx in range(frame_begin_idx, frame_end_idx):
-                frame_fn = os.path.join(self.replay_root, self.replay_task, self.replay_frame_fns[f_idx])
-                frame_data = self.load_frame_data(frame_fn)
-                self.cache_actions.append(frame_data['rel_actions'])
-                print(f"[ReplayModel] action data loaded: {frame_fn}")
-        else:
-            print(f"[ReplayModel] using cached action, idx={self.frame_idx}")
-            pass
+        # if self.frame_idx % self.cache_actions_cnt == 0:  # Need reference
+        #     frame_begin_idx = self.frame_idx
+        #     frame_end_idx = min(self.frame_idx + self.cache_actions_cnt, self.replay_length)
+        #     self.cache_actions = []  # reset
+        #     for f_idx in range(frame_begin_idx, frame_end_idx):
+        #         frame_fn = os.path.join(self.replay_root, self.replay_task, self.replay_frame_fns[f_idx])
+        #         frame_data = self.load_frame_data(frame_fn)
+        #         self.cache_actions.append(frame_data['rel_actions'])
+        #         print(f"[ReplayModel] action data loaded: {frame_fn}")
+        # else:
+        #     print(f"[ReplayModel] using cached action, idx={self.frame_idx}")
+        #     pass
+
+        # Always infer action chunk (len=cache_actions_cnt)
+        frame_begin_idx = self.frame_idx
+        frame_end_idx = min(self.frame_idx + self.cache_actions_cnt, self.replay_length)
+        self.cache_actions = []  # reset
+        for f_idx in range(frame_begin_idx, frame_end_idx):
+            frame_fn = os.path.join(self.replay_root, self.replay_task, self.replay_frame_fns[f_idx])
+            frame_data = self.load_frame_data(frame_fn)
+            self.cache_actions.append(frame_data['rel_actions'])
+            print(f"[ReplayModel] action data loaded: {frame_fn}")
 
         assert len(self.cache_actions) <= self.cache_actions_cnt
-        action_idx = self.frame_idx % self.cache_actions_cnt
-        if action_idx < len(self.cache_actions):
-            action = self.cache_actions[action_idx]
-        else:  # maybe last actions?
-            action = np.zeros((7,))  # zero action
+        # action_idx = self.frame_idx % self.cache_actions_cnt
+        # if action_idx < len(self.cache_actions):
+        #     action = self.cache_actions[action_idx]
+        # else:  # maybe last actions?
+        #     action = np.zeros((7,))  # zero action
+        # No need to extract single action, directly return the whole chunk (len=cache_actions_cnt)
+        action = np.array(self.cache_actions)  # shape: (cache_actions_cnt, 7)
 
         while time.time() - start < (self.sleep_duration / 1000.0):
-            time.sleep(0.01)  # 10ms
+            time.sleep(0.002)  # 2ms
         print(f"Infer delay: {int((time.time() - start) * 1000)}ms, "
               f"action shape: {action.shape}, cached action: {len(self.cache_actions)}")
 
-        self.frame_idx += 1
+        self.frame_idx += self.cache_actions_cnt
         return action.tolist()
 
+    def predict_action(self, *args, **kwargs) -> Dict[str, torch.Tensor]:
+        action_list = self(*args, **kwargs)  # shape: (cache_actions_cnt, 7)
+        action_tensor = torch.tensor(action_list, dtype=torch.float32).unsqueeze(0) # (1, cache_actions_cnt, 7)
+        return {"action_pred": action_tensor}
+
     def load_frame_data(self, frame_fn: str):
-        data_handler = DataHandler.load(file_path=frame_fn)
+        data_handler = DataHandler.load(file_path=frame_fn,
+                                        load_keys=["rel_actions"],)
         data = data_handler.data_dict
         return data
 
@@ -95,6 +115,7 @@ class ReplayModel:
 
     def reset(self):
         self.frame_idx = 0
+        self.infer_frame_idx = 0
 
 
 class DebugEvaluator:
@@ -173,6 +194,7 @@ class ReplayEvaluator:
                  img_hw: tuple = (256, 256),
                  fps: int = 5,
                  ):
+        from robokit.data_manager.realsense_handler import RealsenseHandler
         self.connector = gpu_service_connector
         self.robot = robot
         self.run_loops = run_loops

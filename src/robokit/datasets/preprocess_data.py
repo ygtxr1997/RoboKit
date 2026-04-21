@@ -114,7 +114,10 @@ if __name__ == "__main__":
     Op2. Convert to HDF5
     python scripts/01_preprocess_data.py  \
         -R "/home/geyuan/local_soft/TCL/1009_spoon_pick_place"  \
-        --as_hdf5 "/home/geyuan/local_soft/TCL/hdf5/1009_spoon_pick_place_240p.h5"
+        --as_hdf5 "/home/geyuan/local_soft/TCL/hdf5/1009_spoon_pick_place_240p.h5" 
+    python -m robokit.datasets.preprocess_data  \
+        -R "/home/geyuan/datasets/reverse/0209_tower_boby_easy_reversed"  \
+        --as_hdf5 "/home/geyuan/datasets/reverse/hdf5/0209_tower_boby_easy_reversed_240p.h5"
     """
     args = argparse.ArgumentParser("Test data_manager format")
     args.add_argument("-R", "--root", required=True, type=str, help="Root folder path")

@@ -3,15 +3,15 @@ mm_datasets:
 lerobot_datasets:
   # Note: will be loaded as `LerobotConfig`
   ### Tier 0: The "Big Three" Foundation (基石)
-#  - repo_id: bridge_orig_lerobot
-#    root: /home/geyuan/datasets/ipec_lerobot/
-#    select_video_keys: [observation.images.image_0]
+  - repo_id: bridge_orig_lerobot
+    root: /home/geyuan/datasets/ipec_lerobot/
+    select_video_keys: [observation.images.image_0]
   - repo_id: fractal20220817_data_lerobot
     root: /home/geyuan/datasets/ipec_lerobot/
     select_video_keys: [observation.images.image]
-#  - repo_id: droid_lerobot
-#    root: /home/geyuan/datasets/ipec_lerobot/
-#    select_video_keys: [ observation.images.exterior_image_1_left]
+  - repo_id: droid_lerobot
+    root: /home/geyuan/datasets/ipec_lerobot/
+    select_video_keys: [ observation.images.exterior_image_1_left]
 #  - repo_id: droid_1.0.1  # Not available yet, has some issues
 #    root: /home/geyuan/datasets/ipec_lerobot/fork/
 #    select_video_keys: [observation.images.exterior_1_left]
