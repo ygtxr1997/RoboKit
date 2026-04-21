@@ -38,7 +38,13 @@ upload_fns = [
     # "1201_screw_bulb.zip",
     # "1201_screw_bulb_turn_off.zip",
 
-    "0209_tower_boby.zip",
+    # "0209_tower_boby.zip",
+    # "0209_tower_boby_hard.zip",
+    # "0209_tower_boby_easy.zip",
+
+    # "0417_put_mouse.zip"
+    # "0417_ethernet.zip"
+    "0417_greenyellowred.zip"
 ]
 
 for upload_fn in upload_fns:

@@ -1,6 +1,6 @@
 import time
 import os
-from typing import List
+from typing import List, Dict
 from tqdm import tqdm
 import numpy as np
 from PIL import Image
@@ -12,6 +12,30 @@ from robokit.data_manager.ft300_handler import FT300Handler
 from robokit.data_manager.data_handler import DataHandler, ImageAsVideoSaver, ActionAsVideoSaver
 from robokit.debug_utils.images import concatenate_rgb_images
 from robokit.debug_utils.times import time_stat
+
+
+class ImageRingBuffer:
+    def __init__(self, capacity=24, shape=(480, 640, 3), dtype=np.uint8):
+        self.capacity = capacity
+        # 初始化时一次性分配好所有内存
+        self.buffer = np.zeros((capacity, *shape), dtype=dtype)
+        self.idx = 0
+        self.is_full = False
+
+    def append(self, frame):
+        # 原地覆写最旧的数据，不产生新的内存分配
+        self.buffer[self.idx] = frame
+        self.idx = (self.idx + 1) % self.capacity
+        if self.idx == 0:
+            self.is_full = True
+
+    def get_ordered_stack(self):
+        # 如果需要严格的时间顺序（最旧到最新）
+        if not self.is_full:
+            return self.buffer[:self.idx]
+        # np.roll 返回的是视图的重新排列，如果必须连续内存才拷贝
+        # 但很多操作直接对 roll 后的结果操作即可
+        return np.roll(self.buffer, -self.idx, axis=0)
 
 
 class RealWorldEvaluator:
@@ -30,6 +54,7 @@ class RealWorldEvaluator:
                  speed_scale: float = 0.75,
                  go_home_at_begin: bool = True,
                  reset_remote_api_at_begin: bool = True,
+                 sleep_frames_after_send: float = 0.,
                  # Save as video
                  image_save_speedup: float = 2.0,
                  image_save_fn: str = "tmp_saved_video.mp4",
@@ -61,14 +86,15 @@ class RealWorldEvaluator:
         self.ftsensor = None  # create and calibrate after go_home in run()
 
         self.speed_scale = speed_scale
+        self.sleep_frames_after_send = sleep_frames_after_send
 
         # Dynamic variables
         self.step_cnt = 0
         self.g = 0.
-        self.frame_buffer = {
-            'primary_rgb': [],
-            'gripper_rgb': [],
-            'joint_state': [],
+        self.frame_buffer: Dict[str, ImageRingBuffer] = {
+            'primary_rgb': ImageRingBuffer(capacity=buffer_size, shape=(resize_hw[0], resize_hw[1], 3)),
+            'gripper_rgb': ImageRingBuffer(capacity=buffer_size, shape=(resize_hw[0], resize_hw[1], 3)),
+            'joint_state': ImageRingBuffer(capacity=buffer_size, shape=(12,), dtype=np.float32),
         }  # some policies require 2 or more observation frames
         self.buffer_size = buffer_size
 
@@ -79,8 +105,9 @@ class RealWorldEvaluator:
         self.image_saver = ImageAsVideoSaver(
             buffer_size=run_loops,
             frame_rate=int(self.fps * self.image_save_speedup),
-            height=img_hw[0],
-            width=img_hw[1] * 2,
+            height=int(img_hw[0] / 1.5),  # TODO: resize to save memory
+            width=int(img_hw[1] / 1.5),  # no need to concat for multi-view image saver
+            n_cameras=2,
         )
         self.action_save_flag = action_save_flag
         self.action_save_fn = image_save_fn.replace('.mp4', '_action.mp4')
@@ -151,7 +178,7 @@ class RealWorldEvaluator:
             exit()
 
         for _ in tqdm(range(100), desc="Skipping frames:"):
-            self.capture_env_observation()
+            frame_obs = self.capture_env_observation()
 
         while True:
             cycle_start_time = time.time()
@@ -164,87 +191,52 @@ class RealWorldEvaluator:
             # print(f"[Debug] Observation capture time: {obs_time * 1000:.1f}ms")
 
             # 2. 处理帧缓存（快速）
-            cur_primary_rgb = frame_obs['primary_rgb']
-            cur_gripper_rgb = frame_obs['gripper_rgb']
+            def resize_frame(frame):
+                if self.connector.resize_hw is not None:
+                    return np.array(Image.fromarray(frame).resize((self.connector.resize_hw[1], self.connector.resize_hw[0])))
+                return frame
+
+            cur_primary_rgb = resize_frame(frame_obs['primary_rgb'])
+            cur_gripper_rgb = resize_frame(frame_obs['gripper_rgb'])
             # cur_joint_state = frame_obs['robot_obs'].tolist()[7:13]  # Real joint_state
             cur_joint_state = frame_obs['robot_obs'][:6]  # TCP pos as joint_state
             cur_force = frame_obs['force']  # (6,)
             cur_joint_state = np.concatenate([cur_joint_state, cur_force], axis=0)  # (12,)
 
-            # if len(self.frame_buffer['primary_rgb']) == 0:
-            #     self.frame_buffer['primary_rgb'].append(cur_primary_rgb)
-            #     self.frame_buffer['gripper_rgb'].append(cur_gripper_rgb)
-            #     self.frame_buffer['joint_state'].append(cur_joint_state)
-            #     cur_primary_rgb = np.stack([np.zeros_like(cur_primary_rgb), cur_primary_rgb])
-            #     cur_gripper_rgb = np.stack([np.zeros_like(cur_gripper_rgb), cur_gripper_rgb])
-            #     cur_joint_state = [[0.] * len(cur_joint_state), cur_joint_state]
-            # elif len(self.frame_buffer['primary_rgb']) == 1:
-            #     self.frame_buffer['primary_rgb'].append(cur_primary_rgb)
-            #     self.frame_buffer['gripper_rgb'].append(cur_gripper_rgb)
-            #     self.frame_buffer['joint_state'].append(cur_joint_state)
-            #     cur_primary_rgb = np.stack(self.frame_buffer['primary_rgb'])
-            #     cur_gripper_rgb = np.stack(self.frame_buffer['gripper_rgb'])
-            #     cur_joint_state = self.frame_buffer['joint_state']
-            # else:
-            #     assert len(self.frame_buffer['primary_rgb']) == 2
-            #     cur_primary_rgb = np.stack(self.frame_buffer['primary_rgb'])
-            #     cur_gripper_rgb = np.stack(self.frame_buffer['gripper_rgb'])
-            #     cur_joint_state = list(self.frame_buffer['joint_state'])
-            #     self.frame_buffer['primary_rgb'].pop(0)
-            #     self.frame_buffer['gripper_rgb'].pop(0)
-            #     self.frame_buffer['joint_state'].pop(0)
-
             # --- 更新帧缓存 ---
-            # 如果未满，直接 append；满了先 pop 再 append
-            for key, val in zip(
-                    ['primary_rgb', 'gripper_rgb', 'joint_state'],
-                    [cur_primary_rgb, cur_gripper_rgb, cur_joint_state]
-            ):
-                if len(self.frame_buffer[key]) >= buffer_size:
-                    self.frame_buffer[key].pop(0)
-                self.frame_buffer[key].append(val)
-
-            # --- 构造输出, add pad before the data（长度一定为 buffer_size） ---
-            def pad_to_buffer(data_list, pad_with):
-                """
-                :return: (buffer_size,D) np.ndarray or List
-                """
-                padded = [pad_with for _ in range(buffer_size - len(data_list))] + data_list
-                return np.stack(padded) if isinstance(pad_with, np.ndarray) else padded
-
-            cur_primary_rgb = pad_to_buffer(
-                self.frame_buffer['primary_rgb'],
-                np.zeros_like(cur_primary_rgb)
-            )  # (T,H,W,C)
-            cur_gripper_rgb = pad_to_buffer(
-                self.frame_buffer['gripper_rgb'],
-                np.zeros_like(cur_gripper_rgb)
-            )
-            cur_joint_state = pad_to_buffer(
-                self.frame_buffer['joint_state'],
-                np.zeros_like(cur_joint_state)
-            )  # (T,D)
+            with time_stat("[DEBUG] Frame Buffer Update"):
+                for key, val in zip(
+                        ['primary_rgb', 'gripper_rgb', 'joint_state'],
+                        [cur_primary_rgb, cur_gripper_rgb, cur_joint_state]
+                ):
+                    self.frame_buffer[key].append(val)
 
             # Save current image
-            saved_image = concatenate_rgb_images(
-                self.frame_buffer['primary_rgb'][-1],
-                self.frame_buffer['gripper_rgb'][-1],
-            )
-            self.image_saver.add_image(saved_image)  # last is current
+            # saved_image = concatenate_rgb_images(
+            #     self.frame_buffer['primary_rgb'][-1],
+            #     self.frame_buffer['gripper_rgb'][-1],
+            # )  # (H, 2*W, C)
+            with time_stat("[DEBUG] concat videos"):
+                saved_image_VT_H_W_C = np.concatenate([
+                    self.frame_buffer['primary_rgb'].get_ordered_stack()[-1:, :],  # (N,H,W,C) -> (1,H,W,C)
+                    self.frame_buffer['gripper_rgb'].get_ordered_stack()[-1:, :],  # (N,H,W,C) -> (1,H,W,C)
+                ], axis=0)  # (2,H,W,C)
+                self.image_saver.add_video(saved_image_VT_H_W_C)  # last is current
 
-            # 3. GPU推理（最慢：6秒左右）
-            inference_start = time.time()
-            action = self.connector.send_obs_and_get_action(
-                primary_rgb=cur_primary_rgb[None, :],  # (1,T,H,W,C) to List[str]
-                gripper_rgb=cur_gripper_rgb[None, :],
-                task_description=cur_task_text,
-                joint_state=cur_joint_state[None, :],  # (1,T,6+6)
-            )
-            inference_time = time.time() - inference_start
-            max_inference_time = max(max_inference_time, inference_time)
-            print(f"[Debug] GPU inference time: {inference_time * 1000:.1f}ms, max={max_inference_time * 1000:.1f}ms")
+            with time_stat("[DEBUG] send_obs_and_get_action"):
+                # 3. GPU推理（最慢：6秒左右）
+                inference_start = time.time()
+                action = self.connector.send_obs_and_get_action(
+                    primary_rgb=self.frame_buffer['primary_rgb'].get_ordered_stack()[None, :],  # (1,T,H,W,C) to List[str]
+                    gripper_rgb=self.frame_buffer['gripper_rgb'].get_ordered_stack()[None, :],
+                    task_description=cur_task_text,
+                    joint_state=self.frame_buffer['joint_state'].get_ordered_stack()[None, :],  # (B,T,6+6)
+                )
+                inference_time = time.time() - inference_start
+                max_inference_time = max(max_inference_time, inference_time)
+                print(f"[Debug] GPU inference time: {inference_time * 1000:.1f}ms, max={max_inference_time * 1000:.1f}ms")
 
-            assert action.shape[-1] == 7, f"action.shape[-1]={action.shape} is not (:,7)"
+                assert action.shape[-1] == 7, f"action.shape[-1]={action.shape} is not (:,7)"
 
             ## Slow down when the height is too low
             # safe_min_z = 0.2
@@ -258,6 +250,14 @@ class RealWorldEvaluator:
             # for h in range(action[0].shape[0]):
             #     action[0, h, 3] = 0.
             #     action[0, h, 4] = 0.
+
+            # Fallback when force fz is too large
+            fz = frame_obs['force'][2]
+            if fz < -14.5:  # 过大说明可能撞到了, 给 z 加一个反向的动作补偿
+                print("[Debug] force fz:", fz)
+                for h in range(action[0].shape[0]):
+                    if action[0, h, 2] < 0.:
+                        action[0, h, 2] = -0.1 * action[0, h, 2]
 
             # 4. Conduct action in real-world environment, FPS control
             current_time = time.time()
@@ -278,12 +278,14 @@ class RealWorldEvaluator:
             execution_start = time.time()
             last_execution_time = execution_start
 
-            print("[Info]", self.step_cnt, self.format_array(action), "\n",
-                  self.format_array(np.array(cur_joint_state)), cur_task_text[:20])
+            print("[Info]", self.step_cnt, cur_task_text[:20], f"sleep_frames: {self.sleep_frames_after_send}")
 
             with time_stat("Robot Action Execution"):
                 self.step(action_D=action[0, 0, :])
                 self.on_gripper_move()
+                if self.connector.just_send:
+                    time.sleep(self.sleep_frames_after_send * 1. / self.fps)  # TODO: force to wait the action has been executed
+                    self.step(action_D=np.zeros_like(action[0, 0, :]))  # 停止动作，保持在当前状态
             self.action_saver.add_action(action[0, 0, :])
 
             execution_time = time.time() - execution_start
@@ -356,12 +358,13 @@ class RealWorldEvaluator:
         action[0] *= self.speed_scale
         action[1] *= self.speed_scale
         action[2] *= self.speed_scale
-        action[3] = min(float(action[3]), 1.)
-        action[4] = min(float(action[4]), 1.)
-        action[5] = min(float(action[5]), 1.)
-        action[3] = max(float(action[3]), -1.)
-        action[4] = max(float(action[4]), -1.)
-        action[5] = max(float(action[5]), -1.)
+        ## TODO: why this?
+        # action[3] = min(float(action[3]), 1.)
+        # action[4] = min(float(action[4]), 1.)
+        # action[5] = min(float(action[5]), 1.)
+        # action[3] = max(float(action[3]), -1.)
+        # action[4] = max(float(action[4]), -1.)
+        # action[5] = max(float(action[5]), -1.)
 
         linear_xyz = {'x': action[0], 'y': action[1], 'z': action[2]}
         angular_xyz = {'x': action[3], 'y': action[4], 'z': action[5]}

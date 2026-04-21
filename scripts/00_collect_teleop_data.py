@@ -101,8 +101,27 @@ env_light_params = {
 
 
 ''' Tower '''
-saving_root = "/home/geyuan/local_soft/TCL/0209_tower_boby/"
-task_instruction = "Pick up the purple disc from the pole and place it on the sponge."
+# saving_root = "/home/geyuan/local_soft/TCL/0209_tower_boby/"
+# saving_root = "/home/geyuan/local_soft/TCL/0209_tower_boby_hard/"
+# saving_root = "/home/geyuan/local_soft/TCL/0209_tower_boby_easy/"
+# task_instruction = "Pick up the purple disc from the pole and place it on the sponge."
+# task_instruction = "Pick up the purple disc from the sponge and insert it onto the pole."
+
+''' Mouse '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_put_mouse/"
+# task_instruction = "Pick up the mouse from the wireless charger and place it onto the black mouse pad."
+
+''' Ethernet cable '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_ethernet/"
+# task_instruction = "Plug the ethernet cable into the switch port."
+
+''' GreenYellowRed '''
+saving_root = "/home/geyuan/local_soft/TCL/0417_greenyellowred/"
+task_instruction = "Sequentially take off the three wooden blocks (green, yellow, and red) from the rod and place them on the black mouse pad."
+
+''' Debug '''
+saving_root = "/home/geyuan/local_soft/TCL/tmp/"
+task_instruction = "Warning! this is a debug task!"
 
 env_params = env_source_params
 
@@ -123,6 +142,7 @@ except Exception as e:
 except KeyboardInterrupt:
     print("用户按下 Ctrl+C，程序中断。")
 finally:
+    print("Please wait for all resources to be released...")
     controller.stop()
 
 print("OK!")

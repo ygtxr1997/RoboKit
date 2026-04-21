@@ -596,7 +596,7 @@ class PS5DualSenseController(BaseController):
 
     def update_g(self):
         """ Although DualSense has linear trigger, but there is no need to use it """
-        if self.joystick.get_button(7):
+        if self.joystick.get_button(7) or self.joystick.get_button(6):
             self.g = 1.  # pressed -> close
         else:
             self.g = 0.  # released -> open

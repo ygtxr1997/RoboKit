@@ -72,6 +72,7 @@ class ServiceConnector:
         self.send_cnt = 0
         self.cache_actions_B_T_D = None
         self.stage_flag = 0  # 0:cold start, 1:hot start
+        self.just_send = False  # just send frames or not ?
 
         print(f"[ServiceConnector] session created: {base_url}")
 
@@ -109,7 +110,7 @@ class ServiceConnector:
             primary_rgb: np.ndarray,  # (B,T,H,W,C) uint8
             gripper_rgb: np.ndarray,  # (B,T,H,W,C) uint8
             task_description: Optional[str] = None,
-            joint_state: np.ndarray = None,
+            joint_state: np.ndarray = None,  # (B,T,D)
             *args, **kwargs
     ) -> np.ndarray:
         """
@@ -123,14 +124,24 @@ class ServiceConnector:
         :return: actions predicted by the agent, (B,1,D)
         """
         if self.send_cnt % self.max_cache_actions == 0:
+            # TODO: check last frames
+            from robokit.debug_utils.times import time_stat
+
+            with time_stat("[DEBUG] ServiceConnector preparing data for sending"):
+                joint_state = joint_state[:, :, ...] if joint_state is not None else None  # (B,T,D)
+                gt_video = cat_multiview_video_with_another(
+                    primary_rgb[:, :, ...],  # (B,T,H,W,C)
+                    gripper_rgb[:, :, ...],  # (B,T,H,W,C)
+                    sample_n_views=1,
+                )
+            with time_stat("[DEBUG] ServiceConnector resizing video"):
+                # gt_video = self.resize_video(gt_video)
+                pass  # No need to resize again, we resized in each frame loop
+
             print(f"[ServiceConnector] sending frames, i={self.send_cnt}, per={self.max_cache_actions}, "
-                  f"i%per={self.send_cnt % self.max_cache_actions}")
-            gt_video = cat_multiview_video_with_another(
-                primary_rgb,
-                gripper_rgb,
-                sample_n_views=1,
-            )
-            gt_video = self.resize_video(gt_video)
+                  f"i%per={self.send_cnt % self.max_cache_actions}, gt_video_shape={gt_video.shape}, "
+                  f"joint_state_shape={joint_state.shape}")
+
             if joint_state.shape[-1] == 6:  # only contains TCP xyz + abc
                 B, T, D = joint_state.shape
                 joint_state = np.concatenate((joint_state, np.zeros((B, T, 2))), axis=-1)
@@ -138,15 +149,16 @@ class ServiceConnector:
                 pass
             assert joint_state.shape[-1] in (8, 12), "Joint state should be 8/12-dim."
 
-            request_to_policy = StepRequestFromEvaluator.encode_from_raw(
-                instruction=task_description,
-                stage_flag=self.stage_flag,  # NOTE: ori:0
-                gt_video=gt_video,
-                tcp_state=joint_state,
-            )
+            with time_stat("[DEBUG] ServiceConnector encode_from_raw"):
+                request_to_policy = StepRequestFromEvaluator.encode_from_raw(
+                    instruction=task_description,
+                    stage_flag=self.stage_flag,  # NOTE: ori:0
+                    gt_video=gt_video,
+                    tcp_state=joint_state,
+                )
 
             sending_dict = request_to_policy.model_dump(mode="json")
-            with time_stat("GPU Inference"):
+            with time_stat("Post dict to GPU Inference"):
                 response = self.http_session.post(
                     f"{self.base_url}/step",
                     json=sending_dict
@@ -156,9 +168,10 @@ class ServiceConnector:
             response = response.json()
             raw_actions = StepRequestFromPolicy(action=response["action"]).decode_to_raw()["action"]  # (B,H,7）
 
-            self.cache_actions_B_T_D = raw_actions[:, :, :self.max_cache_actions]
+            self.cache_actions_B_T_D = raw_actions[:, :self.max_cache_actions, :]
+            self.just_send = True
         else:  # don't send anything, to save robots bandwidth
-            pass
+            self.just_send = False
 
         ret_actions = self.cache_actions_B_T_D[:, self.send_cnt % self.max_cache_actions]
         ret_actions = np.array(ret_actions)[:, None]  # [B,D] -> (B,1,D)
@@ -199,31 +212,33 @@ class ServiceConnector:
         if vid_array_B_T_H_W_C is None or self.resize_hw is None:
             return vid_array_B_T_H_W_C
 
-        # Get original shape
         original_shape = vid_array_B_T_H_W_C.shape
+        B, T = original_shape[:2]
+        target_h, target_w = self.resize_hw
 
-        # Reshape to (B*T, H, W, C) or (B*T, H, W) for batch processing
-        if vid_array_B_T_H_W_C.ndim == 5:  # RGB: (B, T, H, W, C)
-            B, T = original_shape[:2]
-            reshaped = vid_array_B_T_H_W_C.reshape(-1, *original_shape[2:])  # (B*T, H, W, C)
-        elif vid_array_B_T_H_W_C.ndim == 4:  # Depth: (B, T, H, W)
-            B, T = original_shape[:2]
-            reshaped = vid_array_B_T_H_W_C.reshape(-1, *original_shape[2:])  # (B*T, H, W)
+        # 1. 提前计算好输入和输出的 Flat 形状，并预分配最终的连续内存块
+        if vid_array_B_T_H_W_C.ndim == 5:  # RGB
+            C = original_shape[-1]
+            out_shape = (B, T, target_h, target_w, C)
+            flat_out_shape = (B * T, target_h, target_w, C)
+        elif vid_array_B_T_H_W_C.ndim == 4:  # Depth
+            out_shape = (B, T, target_h, target_w)
+            flat_out_shape = (B * T, target_h, target_w)
         else:
             raise ValueError(f"Expected 4D or 5D array, got {vid_array_B_T_H_W_C.ndim}D array")
 
-        # Resize all frames
-        target_hw = self.resize_hw
-        resized_frames = [
-            ServiceConnector.resize_image(frame, target_hw, is_depth)
-            for frame in reshaped
-        ]
-        resized_array = np.stack(resized_frames, axis=0)
+        # 使用 np.empty 申请未初始化的内存，速度远快于 np.zeros，因为省去了填 0 的开销
+        resized_array = np.empty(out_shape, dtype=vid_array_B_T_H_W_C.dtype)
 
-        # Reshape back to (B, T, target_h, target_w, C) or (B, T, target_h, target_w)
-        if vid_array_B_T_H_W_C.ndim == 5:
-            return resized_array.reshape(B, T, target_hw[0], target_hw[1], original_shape[-1])
-        else:
-            return resized_array.reshape(B, T, target_hw[0], target_hw[1])
+        # 2. 获取输入和输出的扁平化视图 (View) —— 这里不产生任何数据拷贝
+        flat_input = vid_array_B_T_H_W_C.reshape(-1, *original_shape[2:])
+        flat_output = resized_array.reshape(flat_out_shape)
+
+        with time_stat("[DEBUG] resize_video PIL loop"):
+            # 3. 原地写回，彻底避免中间的 list 聚合和 np.stack 拷贝
+            for i in range(B * T):
+                flat_output[i] = ServiceConnector.resize_image(flat_input[i], self.resize_hw, is_depth)
+
+        return resized_array
 
 

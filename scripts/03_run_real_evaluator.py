@@ -27,7 +27,7 @@ task_instructions = [
     # [7] Pour water
     "Pick up the measuring cup and pour the water into a glass.",
     # [8] Wipe
-    "Wiping the writing on the whiteboard.",
+    "Wiping the writing on the blackboard.",
     # [9] Red Pepper
     "Pick up the red pepper on the box, and then place it into a cup.",
     # [10] Carrot
@@ -47,10 +47,12 @@ def main(opts):
     print('Verifying the ROS target is connected?', client.is_connected)
     robot_client = RobotClient(client)
 
-    if opts.port > 0:
+    if opts.port > 1000:
         test_url = f"http://localhost:{opts.port}"
     elif opts.port == 0:
         test_url = "http://g7-debug.hkueai.org"
+    elif opts.port < 10:
+        test_url = f"http://g7-debug{opts.port}.hkueai.org"
     else:
         raise Exception("Port number should be non-negative.")
     print("[Info] Connecting to GPU service at:", test_url)
@@ -58,23 +60,24 @@ def main(opts):
     print("[Info] Using task:", task_instructions[opts.task])
     gpu_connector = ServiceConnector(
         base_url=test_url,
-        max_cache_actions=30,
+        max_cache_actions=28,  # ori:24
         close_online=not opts.open_online,
     )
     evaluator = RealWorldEvaluator(
         gpu_service_connector=gpu_connector,
         robot=robot_client,
         cur_task_text=task_instructions[opts.task],
-        run_loops=5000,
+        run_loops=6000,  # ori:5000
         img_hw=(480, 848),  # ori:(480, 848)
-        resize_hw=(16*7, 16*10),  # k1:(16*7, 16*10), k8:(16*8, 16*12), dp:(240, 320)
-        buffer_size=1,  # ori:1
+        resize_hw=(240, 320),  # k1:(16*7, 16*10), k8:(16*10, 16*15), dp:(240, 320)
+        buffer_size=28,  # ori:1
         enable_auto_ae_wb=True,
         fps=30,  # ori:30
-        speed_scale=1.,
+        speed_scale=1.,  # TODO:ori:1.
         action_save_flag=opts.action_save_flag,
         go_home_at_begin=not opts.no_home,
         reset_remote_api_at_begin=not opts.no_reset,
+        sleep_frames_after_send=opts.sleep_frames,
     )  # TODO: better AE-WB setting
     try:
         evaluator.run()
@@ -106,5 +109,6 @@ if __name__ == "__main__":
     args.add_argument("--no_home", action="store_true", help="No home at the beginning")
     args.add_argument("--no_reset", action="store_true", help="Not reset remote GPU model at the beginning")
     args.add_argument("--open_online", action="store_true", help="Open online update (set stage_flag=1)")
+    args.add_argument("--sleep_frames", default=1., type=float, help="Scale for sleep time after send")
     args = args.parse_args()
     main(args)
