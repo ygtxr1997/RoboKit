@@ -15,11 +15,19 @@ class TCLDataset(Dataset):
     def __init__(self, root,
                  use_extracted: bool = False,
                  load_keys: List[str] = None,
-                 needs_decode_image: bool = True
+                 needs_decode_image: bool = True,
+                 load_episode_success_fn: str = None,
                  ):
         super(TCLDataset, self).__init__()
         self.root = root
         self.needs_decode_image = needs_decode_image
+
+        # Rollout success/fail related
+        self.load_episode_success = load_episode_success_fn
+        self.episode_success_by_ep = None
+        self.ep_success = []
+        if load_episode_success_fn is not None:
+            self.episode_success_by_ep = self.load_episode_success_from_json(load_episode_success_fn)
 
         self.tasks = self.get_tasks(root)
         self.task_lengths = []
@@ -32,9 +40,13 @@ class TCLDataset(Dataset):
 
             self.task_lengths.append(len(task_ep_fns))
             self.map_index_to_task_id.extend([task_id] * self.task_lengths[task_id])
+            if self.episode_success_by_ep is not None:
+                self.ep_success.extend([self.episode_success_by_ep[task]] * self.task_lengths[task_id])
 
         self.total_length = sum(self.task_lengths)
         assert (len(self.ep_fns) == len(self.map_index_to_task_id))
+        if self.episode_success_by_ep is not None:
+            assert len(self.ep_fns) == len(self.ep_success)
 
         self.extracted_data = {}
         if use_extracted:  # NOTE: needs to be updated
@@ -57,9 +69,28 @@ class TCLDataset(Dataset):
                 continue
             elif "extracted" in task:  # skip some meta info folders
                 continue
+            elif self.episode_success_by_ep is not None and task not in self.episode_success_by_ep:
+                continue
             tasks.append(task)
         tasks.sort()
         return tasks
+
+    def load_episode_success_from_json(self, json_path: str) -> Dict[str, int]:
+        if not os.path.isabs(json_path):
+            json_path = os.path.join(self.root, json_path)
+
+        with open(json_path, 'r') as fp:
+            episode_index = json.load(fp)
+
+        label_to_success = {"Y": 1, "N": -1}
+        episode_success = {}
+        for ep_name, ep_info in episode_index.items():
+            sparse_label = ep_info.get("sparse_label")
+            if sparse_label in label_to_success:
+                episode_success[ep_name] = label_to_success[sparse_label]
+
+        print(f"[TCLDataset] loaded {len(episode_success)} valid episode success labels from {json_path}")
+        return episode_success
 
     def __getitem__(self, index):
         task_id = self.map_index_to_task_id[index]
@@ -68,7 +99,10 @@ class TCLDataset(Dataset):
         npz_data = self.load_single_frame(str(npz_path))
         if npz_data is None:  # file broken or other error
             print("[Warning] file broken at:", npz_path, ", load a random one instead.")
-            npz_data = self.__getitem__(np.random.randint(0, len(self.ep_fns)))
+            return self.__getitem__(np.random.randint(0, len(self.ep_fns)))
+
+        if self.episode_success_by_ep is not None:
+            npz_data["success"] = self.ep_success[index]
 
         return npz_data
 
@@ -363,14 +397,22 @@ class TCLDataset(Dataset):
 
 class TCLDatasetHDF5(TCLDataset):
     def __init__(self, root: str, h5_path: str, keys_config: Dict[str, str] = None, use_h5: bool = True,
-                 use_extracted: bool = False, load_keys: List[str] = None, is_img_decoded_in_h5: bool = False):
+                 use_extracted: bool = False, load_keys: List[str] = None, is_img_decoded_in_h5: bool = False,
+                 load_episode_success_fn: str = None):
         """
         初始化 TCLDatasetHDF5 数据集对象
         :param root: `.npz` 数据集的根目录
         :param h5_path: 输出的 HDF5 文件路径
         :param keys_config: 键配置，指定每个字段的类型（如 'rgb', 'depth', 'string' 等）
         """
-        super().__init__(root, use_extracted, load_keys, is_img_decoded_in_h5)
+        h5_exists = os.path.exists(h5_path)
+        super().__init__(
+            root,
+            use_extracted=use_extracted,
+            load_keys=load_keys,
+            needs_decode_image=is_img_decoded_in_h5,
+            load_episode_success_fn=None if (use_h5 and h5_exists) else load_episode_success_fn,
+        )
         self.h5_path = h5_path
         self.is_img_decoded_in_h5 = is_img_decoded_in_h5
 
@@ -392,7 +434,7 @@ class TCLDatasetHDF5(TCLDataset):
         # 如果 h5_path 存在，提前加载 HDF5 文件
         self.use_h5 = use_h5
         self.dsets = {}
-        if os.path.exists(self.h5_path) and use_h5:
+        if h5_exists and use_h5:
             self._load_hdf5_file()
             print("[TCLDatasetHDF5] using h5 data_manager:", self.h5_path, ". total_len:", self.total_length)
 
@@ -490,6 +532,13 @@ class TCLDatasetHDF5(TCLDataset):
             k: hf.create_dataset(k, shape=shapes[k], dtype=dtypes[k], compression='lzf')
             for k in self.load_keys
         }
+        if self.episode_success_by_ep is not None:
+            datasets["success"] = hf.create_dataset(
+                "success",
+                shape=(self.total_length,),
+                dtype=np.int8,
+                compression='lzf',
+            )
 
         # 3. 定义 DataLoader 和 collate_fn
         def collate_fn(batch):
@@ -525,6 +574,8 @@ class TCLDatasetHDF5(TCLDataset):
                         out[k] = np.stack([np.array(Image.fromarray(x).resize(resize_wh)) for x in items], axis=0)
                 else:
                     out[k] = np.stack(items, axis=0)
+            if self.episode_success_by_ep is not None:
+                out["success"] = np.asarray([b["success"] for b in batch], dtype=np.int8)
             return out
 
         loader = DataLoader(
@@ -550,9 +601,13 @@ class TCLDatasetHDF5(TCLDataset):
     def _load_hdf5_file(self):
         """加载 HDF5 文件并将每个字段的 dataset 存储到 dsets 字典中"""
         self.hf = h5py.File(self.h5_path, 'r')  # 这里打开文件并保留文件句柄
+        self.total_length = 0
         for key in self.keys_config:
             self.dsets[key] = self.hf[key]
             self.total_length = max(len(self.dsets[key]), self.total_length)  # modify total length
+        if "success" in self.hf:
+            self.dsets["success"] = self.hf["success"]
+            self.total_length = max(len(self.dsets["success"]), self.total_length)
 
     def __getitem__(self, index: int):
         """根据索引从 HDF5 文件中读取数据"""
@@ -574,6 +629,8 @@ class TCLDatasetHDF5(TCLDataset):
                         sample[key] = np.array(data)
                 else:
                     sample[key] = data
+            if "success" in self.dsets:  # `success` is not managed by `self.load_keys`
+                sample["success"] = int(self.dsets["success"][index])
         else:
             # 如果没有加载 HDF5 文件或没有指定 h5_path，则回退到从 .npz 读取数据
             sample = super().__getitem__(index)
