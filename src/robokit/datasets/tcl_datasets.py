@@ -47,7 +47,7 @@ class TCLDataset(Dataset):
                          "language_text", "actions", "rel_actions", "robot_obs", "force_torque"]
         self.load_keys = load_keys
 
-        print("[TCLDataset] total length:", self.total_length)
+        print("[TCLDataset] total length:", self.total_length, f"load_keys: {self.load_keys}")
 
     def get_tasks(self, root):
         self.root = root
@@ -386,6 +386,8 @@ class TCLDatasetHDF5(TCLDataset):
             "force_torque": "float",
         }
         self.keys_config = keys_config  # 例如 {"primary_rgb": "rgb", "language_text": "string", ...}
+        if load_keys is not None:
+            self.keys_config = {k: keys_config[k] for k in load_keys}
 
         # 如果 h5_path 存在，提前加载 HDF5 文件
         self.use_h5 = use_h5
