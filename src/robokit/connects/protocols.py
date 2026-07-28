@@ -5,10 +5,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 import copy
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pydantic
 from PIL import Image
+import cv2
 
 
 class StepRequestFromEvaluator(pydantic.BaseModel):
@@ -75,17 +77,46 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
             gt_video_B_T_H_W_C = np.empty((B, T, H, W, C), dtype=np.uint8)
             gt_video_B_T_H_W_C[0, 0] = first_img_np
 
-        for b in range(B):
-            for t in range(T):
-                # 如果用户没传 buffer，且是第一帧，说明刚才嗅探时已经写过了，跳过
-                if b == 0 and t == 0 and out_video_buffer is None:
-                    continue
-                img_byte = base64.b64decode(self.gt_video[b][t])
-                with Image.open(io.BytesIO(img_byte), formats=["JPEG"]) as img_pil:
-                    # np.array(img_pil) 会在局部产生一个极小的临时数组
-                    # 随后立即被覆写进巨型预分配内存 gt_video_B_T_H_W_C 中
-                    # 这将大对象的内存分配次数直接降为 0
-                    gt_video_B_T_H_W_C[b, t] = np.array(img_pil)
+        from robokit.debug_utils.time_profiler import global_time_profiler as gtp
+        # with gtp("pil_decode", group="process_request"):
+        #     for b in range(B):
+        #         for t in range(T):
+        #             # 如果用户没传 buffer，且是第一帧，说明刚才嗅探时已经写过了，跳过
+        #             if b == 0 and t == 0 and out_video_buffer is None:
+        #                 continue
+        #             img_byte = base64.b64decode(self.gt_video[b][t])
+        #             with Image.open(io.BytesIO(img_byte), formats=["JPEG"]) as img_pil:
+        #                 # np.array(img_pil) 会在局部产生一个极小的临时数组
+        #                 # 随后立即被覆写进巨型预分配内存 gt_video_B_T_H_W_C 中
+        #                 # 这将大对象的内存分配次数直接降为 0
+        #                 gt_video_B_T_H_W_C[b, t] = np.array(img_pil)
+
+        # with gtp("cv2_decode", group="process_request"):
+        #     for b in range(B):
+        #         for t in range(T):
+        #             # 如果用户没传 buffer，且是第一帧，说明刚才嗅探时已经写过了，跳过
+        #             if b == 0 and t == 0 and out_video_buffer is None:
+        #                 continue
+        #             img_byte = base64.b64decode(self.gt_video[b][t])
+        #             img_1d = np.frombuffer(img_byte, dtype=np.uint8)
+        #             img_bgr = cv2.imdecode(img_1d, cv2.IMREAD_COLOR)
+        #             gt_video_B_T_H_W_C[b, t] = img_bgr[:, :, ::-1]
+
+        def decode_one(job):
+            b, t, s = job
+            arr = np.frombuffer(base64.b64decode(s), dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # BGR
+            return b, t, img
+
+        jobs = [
+            (b, t, self.gt_video[b][t])
+            for b in range(B) for t in range(T)
+            if not (b == 0 and t == 0 and out_video_buffer is None)
+        ]
+
+        with ThreadPoolExecutor(max_workers=min(T, (os.cpu_count() or 8) * 2)) as ex:
+            for b, t, img_bgr in ex.map(decode_one, jobs, chunksize=16):
+                gt_video_B_T_H_W_C[b, t] = img_bgr[:, :, ::-1]  # 或直接存BGR避免这步
 
         tcp_state_B_T_D = None if self.tcp_state is None else np.array(self.tcp_state, dtype=np.float32)
 
@@ -169,23 +200,82 @@ class StepRequestFromPolicy(pydantic.BaseModel):
 
     Attributes:
         action: (B,v2,D) float32
+        extra_vector: optional extra vector parameters, keyed by vector name. Each
+            value is (B,v2,D) float32; B and v2 should match action, D may be different.
         max_cache_action: int, optional, tell evaluator how many actions to cache, None means
     """
 
     action: List[List[List[float]]]  # len1=B, len2=v2 (v2=H), len3=D
+    extra_vector: Optional[Dict[str, List[List[List[float]]]]] = None  # name -> (B,v2,D) float32
     max_cache_action: int = None  # tell evaluator how many actions to cache, None means no limit
+
+    @pydantic.model_validator(mode="after")
+    def validate_extra_vector_shape(self):
+        if self.extra_vector is None:
+            return self
+
+        action_B = len(self.action)
+        action_v2 = len(self.action[0]) if action_B > 0 else 0
+        for name, vector in self.extra_vector.items():
+            if len(vector) != action_B:
+                raise ValueError(f"extra_vector[{name}] B should match action, got {len(vector)} vs {action_B}")
+            expected_D = None
+            for b, vector_b in enumerate(vector):
+                if len(vector_b) != action_v2:
+                    raise ValueError(
+                        f"extra_vector[{name}][{b}] v2 should match action, got {len(vector_b)} vs {action_v2}"
+                    )
+                for h, vector_bh in enumerate(vector_b):
+                    current_D = len(vector_bh)
+                    if expected_D is None:
+                        expected_D = current_D
+                    elif current_D != expected_D:
+                        raise ValueError(
+                            f"extra_vector[{name}] should have consistent D, got {current_D} at [{b}][{h}] "
+                            f"vs {expected_D}"
+                        )
+        return self
 
     def decode_to_raw(self) -> Dict[str, Any]:
         return {
             "action": np.array(self.action, dtype=np.float32),  # (B,v2,D) float32
+            "extra_vector": None if self.extra_vector is None else {
+                name: np.array(vector, dtype=np.float32)
+                for name, vector in self.extra_vector.items()
+            },
             "max_cache_action": self.max_cache_action,
         }
 
     @classmethod
-    def encode_from_raw(cls, action: np.ndarray) -> 'StepRequestFromPolicy':
+    def encode_from_raw(cls,
+                        action: np.ndarray,
+                        extra_vector: Optional[Dict[str, Any]] = None,
+                        max_cache_action: Optional[int] = None,
+                        ) -> 'StepRequestFromPolicy':
         if action.ndim == 2:  # (H,D)
             action = action[np.newaxis, ...]  # add batch dim
         assert action.ndim == 3, f"action should be (B,H,D), got {action.shape}"
         assert action.dtype in [np.float32, np.float64], f"action should be float32 or float64, got {action.dtype}"
-        instance = cls(action=action.tolist())
+
+        extra_vector_json = None
+        if extra_vector is not None:
+            assert isinstance(extra_vector, dict), "extra_vector should be a dict: name -> (B,H,D)"
+            extra_vector_json = {}
+            for name, vector in extra_vector.items():
+                assert isinstance(name, str), f"extra_vector name should be str, got {type(name)}"
+                vector = np.asarray(vector)
+                if vector.ndim == 2:  # (H,D)
+                    vector = vector[np.newaxis, ...]  # add batch dim
+                assert vector.ndim == 3, f"extra_vector[{name}] should be (B,H,D), got {vector.shape}"
+                assert vector.shape[:2] == action.shape[:2], \
+                    f"extra_vector[{name}] B,H should match action, got {vector.shape[:2]} vs {action.shape[:2]}"
+                assert vector.dtype in [np.float32, np.float64], \
+                    f"extra_vector[{name}] should be float32 or float64, got {vector.dtype}"
+                extra_vector_json[name] = vector.tolist()
+
+        instance = cls(
+            action=action.tolist(),
+            extra_vector=extra_vector_json,
+            max_cache_action=max_cache_action,
+        )
         return instance
