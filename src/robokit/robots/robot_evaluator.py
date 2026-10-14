@@ -8,7 +8,7 @@ from PIL import Image
 from robokit.connects.service_connector import ServiceConnector
 from robokit.robots.robot_client_inovo import RobotClient
 from robokit.data_manager.realsense_handler import RealsenseHandler
-from robokit.data_manager.ft300_handler import FT300Handler
+from robokit.data_manager.ft300_handler import FT300Handler, FT300ModbusStream
 from robokit.data_manager.data_handler import DataHandler, ImageAsVideoSaver, ActionAsVideoSaver
 from robokit.debug_utils.images import concatenate_rgb_images
 from robokit.debug_utils.times import time_stat
@@ -52,7 +52,10 @@ class RealWorldEvaluator:
                  enable_auto_ae_wb: bool = True,
                  buffer_size: int = 1,
                  speed_scale: float = 0.75,
+                 gripper_sticky: int = 80,
+                 camera_skipping: int = 100,  # Skip frames at the beginning to let the camera warm up and stabilize
                  go_home_at_begin: bool = True,
+                 open_gripper_at_begin: bool = True,
                  reset_remote_api_at_begin: bool = True,
                  sleep_frames_after_send: float = 0.,
                  # Save as video
@@ -68,6 +71,7 @@ class RealWorldEvaluator:
         self.connector.resize_hw = resize_hw
         self.future_skip = future_skip
         self.go_home_at_begin = go_home_at_begin
+        self.open_gripper_at_begin = open_gripper_at_begin
         self.reset_remote_api_at_begin = reset_remote_api_at_begin
         self.start_time = time.time()
 
@@ -82,10 +86,12 @@ class RealWorldEvaluator:
         self.camera.set_ae_wb_auto(enable_auto_ae_wb)
         if not enable_auto_ae_wb:
             self.camera.set_ae_wb(exposure=50)
+        self.camera_skipping = camera_skipping
 
         self.ftsensor = None  # create and calibrate after go_home in run()
 
         self.speed_scale = speed_scale
+        self.gripper_sticky = gripper_sticky
         self.sleep_frames_after_send = sleep_frames_after_send
 
         # Dynamic variables
@@ -97,6 +103,7 @@ class RealWorldEvaluator:
             'joint_state': ImageRingBuffer(capacity=buffer_size, shape=(12,), dtype=np.float32),
         }  # some policies require 2 or more observation frames
         self.buffer_size = buffer_size
+        self.last_gripper_close_step = None
 
         # Record
         self.log_time_delays = []
@@ -122,6 +129,8 @@ class RealWorldEvaluator:
         self.first_frame_time = None  # 第一帧的时间戳
         self.last_frame_time = None  # 上一帧的时间戳
         self.total_frames = 0  # 总帧数
+
+        print(f"[RealWorldEvaluator] using gripper_sticky={self.gripper_sticky}")
 
     def time_tick(self):
         self.start_time = time.time()
@@ -172,12 +181,12 @@ class RealWorldEvaluator:
             self.connector.send_reset(cur_task_text)
 
         # Force Sensor
-        self.ftsensor = FT300Handler()
+        self.ftsensor = FT300ModbusStream()
         if not self.ftsensor.connect(calibrate_samples=200):
             print("Failed to connect force torque sensor")
             exit()
 
-        for _ in tqdm(range(100), desc="Skipping frames:"):
+        for _ in tqdm(range(self.camera_skipping), desc="Skipping frames:"):
             frame_obs = self.capture_env_observation()
 
         while True:
@@ -253,11 +262,11 @@ class RealWorldEvaluator:
 
             # Fallback when force fz is too large
             fz = frame_obs['force'][2]
-            if fz < -14.5:  # 过大说明可能撞到了, 给 z 加一个反向的动作补偿
+            if fz < -7.5:  # 过大说明可能撞到了, 给 z 加一个反向的动作补偿
                 print("[Debug] force fz:", fz)
                 for h in range(action[0].shape[0]):
                     if action[0, h, 2] < 0.:
-                        action[0, h, 2] = -0.1 * action[0, h, 2]
+                        action[0, h, 2] = -1. * action[0, h, 2]
 
             # 4. Conduct action in real-world environment, FPS control
             current_time = time.time()
@@ -282,10 +291,14 @@ class RealWorldEvaluator:
 
             with time_stat("Robot Action Execution"):
                 self.step(action_D=action[0, 0, :])
-                self.on_gripper_move()
+                # TODO: HOTFIX: force to close gripper in the first 400 frames
+                if self.step_cnt >= 60:
+                    self.on_gripper_move()
                 if self.connector.just_send:
                     time.sleep(self.sleep_frames_after_send * 1. / self.fps)  # TODO: force to wait the action has been executed
-                    self.step(action_D=np.zeros_like(action[0, 0, :]))  # 停止动作，保持在当前状态
+                    tmp_ee_action = np.zeros_like(action[:1, :1, :])
+                    tmp_ee_action[0, 0, -1] = action[0, 0, -1]
+                    self.step(action_D=tmp_ee_action[0, 0, :])  # 停止动作，保持在当前状态
             self.action_saver.add_action(action[0, 0, :])
 
             execution_time = time.time() - execution_start
@@ -321,7 +334,7 @@ class RealWorldEvaluator:
             robot_data['gripper_width'],
             robot_data['joint_states'][0],
             robot_data['joint_states'][1],
-            robot_data['joint_states'][2],
+            robot_data['joint_states'][2], # - 0.02,  # TODO: hotfix
             robot_data['joint_states'][3],
             robot_data['joint_states'][4],
             robot_data['joint_states'][5],
@@ -369,13 +382,20 @@ class RealWorldEvaluator:
         linear_xyz = {'x': action[0], 'y': action[1], 'z': action[2]}
         angular_xyz = {'x': action[3], 'y': action[4], 'z': action[5]}
 
-        self.g = float(action[6])
-        # if abs(action[3]) + abs(action[4]) + abs(action[5]) > abs(action[0]) + abs(action[1]) + abs(action[2]):
-        #     self.robot.ang_jog_pub(angular_xyz)
-        #     print("angular")
-        # else:
-        #     self.robot.linear_jog_pub(linear_xyz)
-        #     print("linear")
+        target_g = float(action[6])
+
+        # 将传入的值二值化为 1.0 (闭合) 或 0.0 (张开)
+        target_g_binary = 1.0 if target_g > 0.5 else 0.0
+
+        # 初始化记录上一次切换夹爪状态的步数，设为 -100 以确保第一次指令直接生效
+        if not hasattr(self, '_last_g_change_step'):
+            self._last_g_change_step = -100
+
+        # 如果目标状态与当前实际状态不同，并且距离上次切换已经过去至少 100 帧，则允许切换
+        if target_g_binary != self.g and (self.step_cnt - self._last_g_change_step) >= self.gripper_sticky:
+            self.g = target_g_binary
+            self._last_g_change_step = self.step_cnt
+
         self.robot.lin_ang_jog_pub(
             linear_xyz,
             angular_xyz,
@@ -390,8 +410,10 @@ class RealWorldEvaluator:
         # Sanity check for gripper
         # self.robot.gripper_set_pub(1)
         # time.sleep(0.5)
-        self.robot.gripper_set_pub(0)
-        time.sleep(1.5)
+
+        if self.open_gripper_at_begin:
+            self.robot.gripper_set_pub(0)
+            time.sleep(1.5)
 
         # Go back home
         if self.go_home_at_begin:
@@ -402,6 +424,9 @@ class RealWorldEvaluator:
         # self.robot.gripper_set_pub(0)
         # time.sleep(1.5)
         # self.robot.joint_back_coffee()
+
+        self.step(action_D=np.zeros((7,)))  # 停止动作，保持在当前状态
+        time.sleep(1.5)
 
         self.robot.stop()
         self.camera.stop()

@@ -37,6 +37,9 @@ upload_fns = [
 
     # "1201_screw_bulb.zip",
     # "1201_screw_bulb_turn_off.zip",
+    # "1201_screw_bulb_turn_off_table.zip",
+    # "1201_screw_bulb_turn_off_object.zip",
+    # "1201_screw_bulb_turn_off_light.zip",
 
     # "0209_tower_boby.zip",
     # "0209_tower_boby_hard.zip",
@@ -44,7 +47,17 @@ upload_fns = [
 
     # "0417_put_mouse.zip"
     # "0417_ethernet.zip"
-    "0417_greenyellowred.zip"
+    # "0417_greenyellowred.zip"
+    # "0417_test_tube.zip",
+    # "0417_french_press.zip",
+    # "0417_brush.zip",
+    # "0417_plastic_egg.zip",
+    "0417_put_mouse_hard.zip",
+
+    # "260514_ethernet.zip",
+    # "0731_disk_force_3.zip",
+    # "0731_disk_force_6.zip",
+    # "0731_disk_force_7.zip",
 ]
 
 for upload_fn in upload_fns:

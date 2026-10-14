@@ -35,7 +35,9 @@ task_instructions = [
     # [11] Screw Bulb
     "Screw the bulb into the light socket, and turn on the light.",
     # [12] Screw Bulb Turn Off
-    "Screw the bulb into the light socket, and turn off the light after the bulb is on."
+    "Screw the bulb into the light socket, and turn off the light after the bulb is on.",
+    # [13] Ethernet
+    "Disconnect the ethernet cable from the `uplink` port, then insert it into port `1`.",
 ]
 
 
@@ -60,8 +62,9 @@ def main(opts):
     print("[Info] Using task:", task_instructions[opts.task])
     gpu_connector = ServiceConnector(
         base_url=test_url,
-        max_cache_actions=28,  # ori:24
+        max_cache_actions=24,  # ori:24
         close_online=not opts.open_online,
+        num_camera_views=2,
     )
     evaluator = RealWorldEvaluator(
         gpu_service_connector=gpu_connector,
@@ -70,12 +73,15 @@ def main(opts):
         run_loops=6000,  # ori:5000
         img_hw=(480, 848),  # ori:(480, 848)
         resize_hw=(240, 320),  # k1:(16*7, 16*10), k8:(16*10, 16*15), dp:(240, 320)
-        buffer_size=28,  # ori:1
+        buffer_size=24,  # ori:1
         enable_auto_ae_wb=True,
+        camera_skipping=opts.camera_skipping,
         fps=30,  # ori:30
-        speed_scale=1.,  # TODO:ori:1.
+        speed_scale=1.,  # ori:1.
+        gripper_sticky=opts.gripper_sticky,
         action_save_flag=opts.action_save_flag,
         go_home_at_begin=not opts.no_home,
+        open_gripper_at_begin=not opts.no_open,
         reset_remote_api_at_begin=not opts.no_reset,
         sleep_frames_after_send=opts.sleep_frames,
     )  # TODO: better AE-WB setting
@@ -107,8 +113,11 @@ if __name__ == "__main__":
     args.add_argument("-a", "--action_save_flag", default=False, action="store_true", help="Action save flag")
     args.add_argument("-k", "--future_skip", default=1, type=int, help="Skip for future frames (not supported yet)")
     args.add_argument("--no_home", action="store_true", help="No home at the beginning")
+    args.add_argument("--no_open", action="store_true", help="No opening gripper at beginning")
     args.add_argument("--no_reset", action="store_true", help="Not reset remote GPU model at the beginning")
     args.add_argument("--open_online", action="store_true", help="Open online update (set stage_flag=1)")
     args.add_argument("--sleep_frames", default=1., type=float, help="Scale for sleep time after send")
+    args.add_argument("-gs", "--gripper_sticky", default=0, type=int, help="Gripper sticky level (0: non-sticky, 80: super-sticky)")
+    args.add_argument("-cs", "--camera_skipping", default=100, type=int, help="Skip camera frames to stabilize.")
     args = args.parse_args()
     main(args)

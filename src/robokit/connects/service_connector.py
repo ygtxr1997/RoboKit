@@ -59,11 +59,13 @@ class ServiceConnector:
             base_url: str = "http://localhost:6060",
             resize_hw: tuple = None,
             max_cache_actions: int = 28,
+            num_camera_views: int = 1,
             close_online: bool = True,
     ):
         self.base_url = base_url
         self.http_session = requests.Session()
         self.resize_hw = resize_hw
+        self.num_camera_views = num_camera_views
         self.close_online = close_online
 
         # Dynamic
@@ -124,7 +126,6 @@ class ServiceConnector:
         :return: actions predicted by the agent, (B,1,D)
         """
         if self.send_cnt % self.max_cache_actions == 0:
-            # TODO: check last frames
             from robokit.debug_utils.times import time_stat
 
             with time_stat("[DEBUG] ServiceConnector preparing data for sending"):
@@ -155,6 +156,8 @@ class ServiceConnector:
                     stage_flag=self.stage_flag,  # NOTE: ori:0
                     gt_video=gt_video,
                     tcp_state=joint_state,
+                    num_camera_views=self.num_camera_views,
+                    max_cache_action=self.max_cache_actions,
                 )
 
             sending_dict = request_to_policy.model_dump(mode="json")

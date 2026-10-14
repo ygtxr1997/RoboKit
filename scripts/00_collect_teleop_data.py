@@ -1,5 +1,5 @@
 import roslibpy
-
+import traceback
 from robokit.robots.robot_client_inovo import RobotClient
 from robokit.controllers.tele_control import PS5DualSenseIMUController
 
@@ -98,6 +98,12 @@ env_light_params = {
 # task_instruction = "Screw the bulb into the light socket, and turn on the light."
 # saving_root = "/home/geyuan/local_soft/TCL/1201_screw_bulb_turn_off/"
 # task_instruction = "Screw the bulb into the light socket, and turn off the light after the bulb is on."
+# saving_root = "/home/geyuan/local_soft/TCL/1201_screw_bulb_turn_off_table/"
+# task_instruction = "Screw the bulb into the light socket, and turn off the light after the bulb is on. [ENV:table]"
+# saving_root = "/home/geyuan/local_soft/TCL/1201_screw_bulb_turn_off_object/"
+# task_instruction = "Screw the bulb into the light socket, and turn off the light after the bulb is on. [ENV:object]"
+# saving_root = "/home/geyuan/local_soft/TCL/1201_screw_bulb_turn_off_light/"
+# task_instruction = "Screw the bulb into the light socket, and turn off the light after the bulb is on. [ENV:light]"
 
 
 ''' Tower '''
@@ -110,18 +116,43 @@ env_light_params = {
 ''' Mouse '''
 # saving_root = "/home/geyuan/local_soft/TCL/0417_put_mouse/"
 # task_instruction = "Pick up the mouse from the wireless charger and place it onto the black mouse pad."
+saving_root = "/home/geyuan/local_soft/TCL/0417_put_mouse_hard/"
+task_instruction = "Pick up the mouse from the black mouse pad and place it onto the wireless charger."
 
 ''' Ethernet cable '''
 # saving_root = "/home/geyuan/local_soft/TCL/0417_ethernet/"
 # task_instruction = "Plug the ethernet cable into the switch port."
+# saving_root = "/home/geyuan/local_soft/TCL/260514_ethernet/"
+# task_instruction = "Disconnect the ethernet cable from the `uplink` port, then insert it into port `1`."
 
 ''' GreenYellowRed '''
-saving_root = "/home/geyuan/local_soft/TCL/0417_greenyellowred/"
-task_instruction = "Sequentially take off the three wooden blocks (green, yellow, and red) from the rod and place them on the black mouse pad."
+# saving_root = "/home/geyuan/local_soft/TCL/0417_greenyellowred/"
+# task_instruction = "Sequentially take off the three wooden blocks (green, yellow, and red) from the rod and place them on the black mouse pad."
+
+''' Test Tube '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_test_tube/"
+# task_instruction = "Pull out the test tube from the test tube rack"
+
+''' Test Tube '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_french_press/"
+# task_instruction = "Lift the lid off the French press and set it on the towel."
+
+''' Brush '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_brush/"
+# task_instruction = "Disassemble the brush and the dustpan"
+
+''' Plastic Egg '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_plastic_egg/"
+# task_instruction = "Pick the plastic egg and place it into the egg box."
 
 ''' Debug '''
-saving_root = "/home/geyuan/local_soft/TCL/tmp/"
-task_instruction = "Warning! this is a debug task!"
+# saving_root = "/home/geyuan/local_soft/TCL/tmp/"
+# task_instruction = "Warning! this is a debug task!"
+
+
+''' disk force 3 '''
+# saving_root = "/home/geyuan/local_soft/TCL/0731_disk_force_9/"
+# task_instruction = "Pick up the purple disc from the sponge and insert it onto the pole."
 
 env_params = env_source_params
 
@@ -138,7 +169,8 @@ controller = PS5DualSenseIMUController(
 try:
     controller.start()
 except Exception as e:
-    print(e)
+    print("Error: {}".format(e))
+    traceback.print_exc()
 except KeyboardInterrupt:
     print("用户按下 Ctrl+C，程序中断。")
 finally:

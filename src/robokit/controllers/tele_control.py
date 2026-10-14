@@ -40,6 +40,11 @@ class BaseController:
         self.robot = robot
         self.linear_scale = 0.1
         self.angular_scale = 0.1
+        self.basic_linear_scale = self.linear_scale
+        self.basic_angular_scale = self.angular_scale
+        self.speed_mult_ratio = 1.6
+        self.slowest_speed_mult = 2
+        self.fastest_speed_mult = 2
         self.fps = action_fps
 
         # Dynamic
@@ -102,6 +107,10 @@ class BaseController:
         toggle_flag = False
         last_game_time = pygame.time.get_ticks()
 
+        # Reset some params, because some params may have been changed by the subclasses
+        self.basic_linear_scale = self.linear_scale
+        self.basic_angular_scale = self.angular_scale
+
         back_home_pressed = False
         start_episode_pressed = False
         end_episode_pressed = False
@@ -128,6 +137,20 @@ class BaseController:
                         toggle_flag = False  # 当按钮释放时允许再次切换
                     elif event.button == self.get_angular_button():
                         self.on_angular_button_released()
+
+                elif event.type == pygame.JOYHATMOTION:
+                    # event.hat 表示被触发的 hat 索引，通常手柄上只有一个十字键，索引为 0
+                    if event.hat == 0:
+                        x, y = event.value
+                        # y 轴对应上下按键，1 表示按了上，-1 表示按了下，0 表示释放
+                        if y == 1:
+                            self.on_hat_pressed(0)
+                        elif y == -1:
+                            self.on_hat_pressed(6)
+                        if x == -1:
+                            self.on_hat_pressed(9)
+                        elif x == 1:
+                            self.on_hat_pressed(3)
 
 
             self.update_state()
@@ -385,6 +408,26 @@ class BaseController:
         self.g = g if g is not None else self.g
         self.robot.gripper_set_pub(self.g)
 
+    def on_hat_pressed(self, hat_direction: int = -1) -> None:
+        if hat_direction == -1: return  # do nothing
+        speed_mult_ratio = self.speed_mult_ratio
+        if hat_direction == 0:  # up
+            self.linear_scale = min(self.linear_scale * speed_mult_ratio,
+                                    self.basic_linear_scale * (speed_mult_ratio ** self.fastest_speed_mult))
+            self.angular_scale = min(self.angular_scale * speed_mult_ratio,
+                                     self.basic_angular_scale * (speed_mult_ratio ** 0))  # `1` is always as max angular
+        elif hat_direction == 6:  # down
+            self.linear_scale = max(self.linear_scale / speed_mult_ratio,
+                                    self.basic_linear_scale / (speed_mult_ratio ** self.slowest_speed_mult))
+            self.angular_scale = max(self.angular_scale / speed_mult_ratio,
+                                     self.basic_angular_scale / (speed_mult_ratio ** self.slowest_speed_mult))
+        elif hat_direction == 3:  # right
+            pass
+        elif hat_direction == 9:  # left
+            pass
+        print(f"[DEBUG] speed scale changed: linear_s={self.linear_scale:.4f}, angular_s={self.angular_scale:.4f}")
+
+
     def on_start_episode(self) -> None:
         self.need_saving = True
         self.saving_dir = os.path.join(self.saving_root, self.get_datetime_str())
@@ -554,6 +597,8 @@ class PS5DualSenseController(BaseController):
         ↓:                  Hat0 ( 0,-1)
         ←:                  Hat0 (-1, 0)
         →:                  Hat0 ( 1, 0)
+        Left Stick Press:   11,
+        Right Stick Press:  12,
         """
         self.joystick_idx = joystick_idx
         self.joystick = pygame.joystick.Joystick(joystick_idx)
