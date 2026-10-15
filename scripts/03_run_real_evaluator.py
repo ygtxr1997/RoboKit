@@ -79,6 +79,7 @@ def main(opts):
         fps=30,  # ori:30
         speed_scale=1.,  # ori:1.
         gripper_sticky=opts.gripper_sticky,
+        continuous_gripper=opts.continuous_gripper,
         action_save_flag=opts.action_save_flag,
         go_home_at_begin=not opts.no_home,
         open_gripper_at_begin=not opts.no_open,
@@ -118,6 +119,8 @@ if __name__ == "__main__":
     args.add_argument("--open_online", action="store_true", help="Open online update (set stage_flag=1)")
     args.add_argument("--sleep_frames", default=1., type=float, help="Scale for sleep time after send")
     args.add_argument("-gs", "--gripper_sticky", default=0, type=int, help="Gripper sticky level (0: non-sticky, 80: super-sticky)")
+    args.add_argument("--continuous_gripper", action="store_true",
+                      help="Execute continuous closure targets (0 open, 1 closed); ignores gripper_sticky")
     args.add_argument("-cs", "--camera_skipping", default=100, type=int, help="Skip camera frames to stabilize.")
     args = args.parse_args()
     main(args)

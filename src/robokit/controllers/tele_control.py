@@ -114,6 +114,7 @@ class BaseController:
         back_home_pressed = False
         start_episode_pressed = False
         end_episode_pressed = False
+        previous_hat_x = 0
 
         while self.game_state != GameState.STOPPED:
             # Joystick FPS
@@ -147,10 +148,11 @@ class BaseController:
                             self.on_hat_pressed(0)
                         elif y == -1:
                             self.on_hat_pressed(6)
-                        if x == -1:
+                        if x == -1 and previous_hat_x != -1:
                             self.on_hat_pressed(9)
                         elif x == 1:
                             self.on_hat_pressed(3)
+                        previous_hat_x = x
 
 
             self.update_state()
@@ -685,12 +687,43 @@ class PS5DualSenseController(BaseController):
 class PS5DualSenseIMUController(PS5DualSenseController):
     def __init__(self, robot: RobotClient, joystick_idx: int = 0,
                  saving_root: str = "collected_data_0422/",
+                 limited_gripper_open_ratio: float = 0.1,
                  **kwargs
                  ):
+        if not 0.0 <= limited_gripper_open_ratio <= 1.0:
+            raise ValueError("limited_gripper_open_ratio must be in [0, 1]")
+        self.limited_gripper_open_ratio = float(limited_gripper_open_ratio)
+        self.limited_gripper_mode = False
+        self._gripper_pressed = False
+        self._gripper_target = 0.0
         PS5DualSenseController.__init__(self, robot, joystick_idx=joystick_idx,
                                      saving_root=saving_root, **kwargs)
         self.imu_controller = RawIMUHandler()
         self.angular_scale = .4  # fps20:0.2, fps30:0.4, now:0.35
+        print("[Gripper] mode 1: opening 100%; left D-pad toggles mode for the next release")
+
+    def on_hat_pressed(self, hat_direction: int = -1) -> None:
+        """Toggle the next gripper opening mode with the left D-pad."""
+        if hat_direction != 9:
+            super().on_hat_pressed(hat_direction)
+            return
+        self.limited_gripper_mode = not self.limited_gripper_mode
+        ratio = self.limited_gripper_open_ratio if self.limited_gripper_mode else 1.0
+        mode = 2 if self.limited_gripper_mode else 1
+        print(f"[Gripper] mode {mode}: opening {ratio:.0%}; applies on next trigger release")
+
+    def on_gripper_move(self, g: float = None) -> None:
+        """Apply the selected opening limit only on a trigger release."""
+        self.g = g if g is not None else self.g
+        pressed = self.g > 0.5
+        if pressed:
+            self._gripper_target = 1.0
+        elif self._gripper_pressed:
+            ratio = self.limited_gripper_open_ratio if self.limited_gripper_mode else 1.0
+            self._gripper_target = 1.0 - ratio
+        # Called only while running: mode changes alone never move the gripper.
+        self.robot.gripper_set_pub(self._gripper_target, continuous=True)
+        self._gripper_pressed = pressed
 
     def update_xyz(self):
 

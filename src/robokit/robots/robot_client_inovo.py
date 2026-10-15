@@ -42,7 +42,8 @@ class RobotClient:
             'reached_goal': True,
             'position': 1.,
             'state': GripperState.INIT,  # managed by ourselves
-            'message': 0.,  # 0:open, 1:close
+            'message': 0.,  # target closure ratio: 0 open, 1 closed
+            'command_position': None,  # last published opening target
         }
 
         # SUBSCRIBING to DEBUG info
@@ -111,8 +112,8 @@ class RobotClient:
 
         #### Gripper ####
         self.gripper_publisher = roslibpy.Topic(
-            self._ros, "/devices/robotiqd/grip/goal",
-            "gripper_msgs/GripperBasicCommandActionGoal"
+            self._ros, "/devices/robotiqd/gripper_command/goal",
+            "control_msgs/GripperCommandActionGoal"
         )
 
         ## Arm and PSU power and activation ##
@@ -335,19 +336,44 @@ class RobotClient:
         }}))
 
     #### GRIPPER CONTROL ####
-    def _send_gripper_action(self, action: int):
-        # Send, 0:GRIP, 1:RELEASE, 2:TOGGLE
+    def _send_gripper_position(self, position: float):
+        """Publish a normalized gripper opening position: 0 closed, 1 open."""
+        position = max(min(float(position), 1.0), 0.0)
         self.gripper_publisher.publish(roslibpy.Message({
             "goal": {
-                "action": action  # 0:GRIP, 1:RELEASE, 2:TOGGLE
+                "command": {
+                    "position": position,
+                    "max_effort": 85.0,
+                }
             }
         }))
+        self.gripper['command_position'] = position
+        self.gripper['message'] = 1.0 - position
+
+    def _send_gripper_action(self, action: int):
+        # Keep the existing action semantics: 0:GRIP, 1:RELEASE.
+        if action == 0:
+            self._send_gripper_position(0.0)
+        elif action == 1:
+            self._send_gripper_position(1.0)
+        else:
+            raise ValueError(f"Unsupported gripper action: {action}")
+
+    def gripper_set_position(self, position: float):
+        """Set a normalized opening target, publishing only when it changes."""
+        position = max(min(float(position), 1.0), 0.0)
+        last_position = self.gripper['command_position']
+        if last_position is None or abs(position - last_position) > 1e-8:
+            self._send_gripper_position(position)
+        # A subsequent binary command must not trust the old open/closed state.
+        self.gripper['state'] = GripperState.INIT
 
     def gripper_set_pub(self,
-                        message: float):  # message:0-open, 1-close
-        """ message: 0: To Open; 1: To Close """
-        client = self._ros
-        self.gripper['message'] = message
+                        message: float, continuous: bool = False):
+        """Set closure ratio (0 open, 1 closed), binary unless continuous is enabled."""
+        if continuous:
+            self.gripper_set_position(1.0 - float(message))
+            return
 
         DIST_EPS = 0.01
         POS_MAX = 0.99
@@ -404,8 +430,8 @@ class RobotClient:
         return
 
     def get_gripper_message(self):
-        """ 0:Open; 1:Close """
-        return self.gripper['message']  # binary, in {0,1}
+        """Return the last commanded closure ratio: 0 open, 1 closed."""
+        return self.gripper['message']
 
     def get_gripper_opening_width(self):
         return self.gripper['position']  # ratio, in [0,1]
@@ -511,16 +537,10 @@ class RobotClient:
         pp.pprint(d)
 
     def get_current_frame_info(self, verbose=False):
-        if self.gripper['state'].value in GripperState.STATE_ZERO.value:
-            gripper_moving_to = 0
-        else:
-            assert self.gripper['state'].value in GripperState.STATE_ONE.value
-            gripper_moving_to = 1
-
         data_dict = {
             "tcp_xyz_wrt_base": self.get_tcp_coordinates(),
             "tcp_ori_wrt_base": self.get_tcp_orientation(out_type='euler_radius'),
-            "gripper_moving_to": gripper_moving_to,
+            "gripper_moving_to": self.get_gripper_message(),
             "jog_linear": self.message_linear_jog,
             "jog_angular": self.message_angular_jog,
             "gripper_width": self.gripper['position'],

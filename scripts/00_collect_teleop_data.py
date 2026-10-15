@@ -116,8 +116,8 @@ env_light_params = {
 ''' Mouse '''
 # saving_root = "/home/geyuan/local_soft/TCL/0417_put_mouse/"
 # task_instruction = "Pick up the mouse from the wireless charger and place it onto the black mouse pad."
-saving_root = "/home/geyuan/local_soft/TCL/0417_put_mouse_hard/"
-task_instruction = "Pick up the mouse from the black mouse pad and place it onto the wireless charger."
+# saving_root = "/home/geyuan/local_soft/TCL/0417_put_mouse_hard/"
+# task_instruction = "Pick up the mouse from the black mouse pad and place it onto the wireless charger."
 
 ''' Ethernet cable '''
 # saving_root = "/home/geyuan/local_soft/TCL/0417_ethernet/"
@@ -149,6 +149,9 @@ task_instruction = "Pick up the mouse from the black mouse pad and place it onto
 # saving_root = "/home/geyuan/local_soft/TCL/tmp/"
 # task_instruction = "Warning! this is a debug task!"
 
+''' lh_tower '''
+saving_root = "/home/geyuan/local_soft/TCL/1014_lh_tower_three_blocks/"
+task_instruction = "Stack the wooden blocks onto the peg in the order: purple, red, yellow."
 
 ''' disk force 3 '''
 # saving_root = "/home/geyuan/local_soft/TCL/0731_disk_force_9/"
@@ -159,6 +162,7 @@ env_params = env_source_params
 rc = RobotClient(client)
 controller = PS5DualSenseIMUController(
     robot=rc,
+    limited_gripper_open_ratio=0.18,  # mode 2 opening ratio; left D-pad toggles mode
     saving_root=saving_root,
     task_instruction=task_instruction,
     saving_workers=6,

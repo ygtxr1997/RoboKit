@@ -62,6 +62,7 @@ class RealWorldEvaluator:
                  image_save_speedup: float = 2.0,
                  image_save_fn: str = "tmp_saved_video.mp4",
                  action_save_flag: bool = False,
+                 continuous_gripper: bool = False,
                  ):
         self.connector = gpu_service_connector
         self.robot = robot
@@ -92,6 +93,9 @@ class RealWorldEvaluator:
 
         self.speed_scale = speed_scale
         self.gripper_sticky = gripper_sticky
+        self.continuous_gripper = continuous_gripper
+        if continuous_gripper and gripper_sticky != 0:
+            print(f"[Warning] continuous_gripper enabled: gripper_sticky={gripper_sticky} is ignored.")
         self.sleep_frames_after_send = sleep_frames_after_send
 
         # Dynamic variables
@@ -384,17 +388,16 @@ class RealWorldEvaluator:
 
         target_g = float(action[6])
 
-        # 将传入的值二值化为 1.0 (闭合) 或 0.0 (张开)
-        target_g_binary = 1.0 if target_g > 0.5 else 0.0
-
-        # 初始化记录上一次切换夹爪状态的步数，设为 -100 以确保第一次指令直接生效
-        if not hasattr(self, '_last_g_change_step'):
-            self._last_g_change_step = -100
-
-        # 如果目标状态与当前实际状态不同，并且距离上次切换已经过去至少 100 帧，则允许切换
-        if target_g_binary != self.g and (self.step_cnt - self._last_g_change_step) >= self.gripper_sticky:
-            self.g = target_g_binary
-            self._last_g_change_step = self.step_cnt
+        if self.continuous_gripper:
+            self.g = max(min(target_g, 1.0), 0.0)
+        else:
+            target_g_binary = 1.0 if target_g > 0.5 else 0.0
+            if not hasattr(self, '_last_g_change_step'):
+                self._last_g_change_step = -100
+            # Sticky applies only to binary open/close transitions.
+            if target_g_binary != self.g and (self.step_cnt - self._last_g_change_step) >= self.gripper_sticky:
+                self.g = target_g_binary
+                self._last_g_change_step = self.step_cnt
 
         self.robot.lin_ang_jog_pub(
             linear_xyz,
@@ -403,7 +406,7 @@ class RealWorldEvaluator:
 
     def on_gripper_move(self, g: float = None) -> None:
         self.g = g if g is not None else self.g
-        self.robot.gripper_set_pub(self.g)
+        self.robot.gripper_set_pub(self.g, continuous=self.continuous_gripper)
 
     def reset(self):
         # return
