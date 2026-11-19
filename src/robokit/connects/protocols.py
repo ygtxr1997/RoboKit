@@ -200,82 +200,23 @@ class StepRequestFromPolicy(pydantic.BaseModel):
 
     Attributes:
         action: (B,v2,D) float32
-        extra_vector: optional extra vector parameters, keyed by vector name. Each
-            value is (B,v2,D) float32; B and v2 should match action, D may be different.
         max_cache_action: int, optional, tell evaluator how many actions to cache, None means
     """
 
     action: List[List[List[float]]]  # len1=B, len2=v2 (v2=H), len3=D
-    extra_vector: Optional[Dict[str, List[List[List[float]]]]] = None  # name -> (B,v2,D) float32
     max_cache_action: int = None  # tell evaluator how many actions to cache, None means no limit
-
-    @pydantic.model_validator(mode="after")
-    def validate_extra_vector_shape(self):
-        if self.extra_vector is None:
-            return self
-
-        action_B = len(self.action)
-        action_v2 = len(self.action[0]) if action_B > 0 else 0
-        for name, vector in self.extra_vector.items():
-            if len(vector) != action_B:
-                raise ValueError(f"extra_vector[{name}] B should match action, got {len(vector)} vs {action_B}")
-            expected_D = None
-            for b, vector_b in enumerate(vector):
-                if len(vector_b) != action_v2:
-                    raise ValueError(
-                        f"extra_vector[{name}][{b}] v2 should match action, got {len(vector_b)} vs {action_v2}"
-                    )
-                for h, vector_bh in enumerate(vector_b):
-                    current_D = len(vector_bh)
-                    if expected_D is None:
-                        expected_D = current_D
-                    elif current_D != expected_D:
-                        raise ValueError(
-                            f"extra_vector[{name}] should have consistent D, got {current_D} at [{b}][{h}] "
-                            f"vs {expected_D}"
-                        )
-        return self
 
     def decode_to_raw(self) -> Dict[str, Any]:
         return {
             "action": np.array(self.action, dtype=np.float32),  # (B,v2,D) float32
-            "extra_vector": None if self.extra_vector is None else {
-                name: np.array(vector, dtype=np.float32)
-                for name, vector in self.extra_vector.items()
-            },
             "max_cache_action": self.max_cache_action,
         }
 
     @classmethod
-    def encode_from_raw(cls,
-                        action: np.ndarray,
-                        extra_vector: Optional[Dict[str, Any]] = None,
-                        max_cache_action: Optional[int] = None,
-                        ) -> 'StepRequestFromPolicy':
+    def encode_from_raw(cls, action: np.ndarray) -> 'StepRequestFromPolicy':
         if action.ndim == 2:  # (H,D)
             action = action[np.newaxis, ...]  # add batch dim
         assert action.ndim == 3, f"action should be (B,H,D), got {action.shape}"
         assert action.dtype in [np.float32, np.float64], f"action should be float32 or float64, got {action.dtype}"
-
-        extra_vector_json = None
-        if extra_vector is not None:
-            assert isinstance(extra_vector, dict), "extra_vector should be a dict: name -> (B,H,D)"
-            extra_vector_json = {}
-            for name, vector in extra_vector.items():
-                assert isinstance(name, str), f"extra_vector name should be str, got {type(name)}"
-                vector = np.asarray(vector)
-                if vector.ndim == 2:  # (H,D)
-                    vector = vector[np.newaxis, ...]  # add batch dim
-                assert vector.ndim == 3, f"extra_vector[{name}] should be (B,H,D), got {vector.shape}"
-                assert vector.shape[:2] == action.shape[:2], \
-                    f"extra_vector[{name}] B,H should match action, got {vector.shape[:2]} vs {action.shape[:2]}"
-                assert vector.dtype in [np.float32, np.float64], \
-                    f"extra_vector[{name}] should be float32 or float64, got {vector.dtype}"
-                extra_vector_json[name] = vector.tolist()
-
-        instance = cls(
-            action=action.tolist(),
-            extra_vector=extra_vector_json,
-            max_cache_action=max_cache_action,
-        )
+        instance = cls(action=action.tolist())
         return instance

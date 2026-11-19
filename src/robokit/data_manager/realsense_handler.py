@@ -197,7 +197,9 @@ class RealsenseHandler(object):
         camera_info = "all" if camera_idx == -1 else [str(camera_idx)]
         print(f"[RealsenseHandler] Switching auto-white-balance mode to: {auto_adjust}, cameras: {camera_info}")
 
-    def capture_frames(self, save_prefix: str = None, skip_frames: int = 0, skip_seconds: float = -1.):
+    def capture_frames(self, save_prefix: str = None, skip_frames: int = 0, skip_seconds: float = -1.,
+                       return_timestamps: bool = False):
+        """Read raw RGB-D pairs, optionally retaining host receive and device times."""
         pipelines = self.pipelines
 
         pipeline1 = pipelines[0]
@@ -213,10 +215,12 @@ class RealsenseHandler(object):
             time.sleep(skip_seconds)
 
         frames1 = pipeline1.wait_for_frames()
+        received1 = time.monotonic()
         frames2 = pipeline2.wait_for_frames()
+        received2 = time.monotonic()
 
-        aligned_frames1 = self.align.process(frames1)
-        aligned_frames2 = self.align.process(frames2)
+        # Consumers use raw depth and factory geometry. The discarded aligned
+        # frames previously added processing delay without changing these arrays.
 
         # 将对其的RGB—D图取出来
         depth_image1, depth_image2 = None, None
@@ -238,7 +242,7 @@ class RealsenseHandler(object):
             depth_colored_image = Image.fromarray(depth_colored)
             return depth_colored_image
 
-        if self.use_depth:
+        if self.use_depth and save_prefix is not None:
             depth_colored_image1 = map_depth_with_color(depth_image1)
             depth_colored_image2 = map_depth_with_color(depth_image2)
 
@@ -262,12 +266,33 @@ class RealsenseHandler(object):
 
             print(f"[RealsenseHandler] Images saved as: {save_prefix}_xxx.jpg/png")
 
-        return {
+        result = {
             "color1": color_image1,
             "color2": color_image2,
             "depth1": depth_image1,
             "depth2": depth_image2,
         }
+        if return_timestamps:
+            # The SDK maps global/system timestamps to the host wall clock. Map
+            # those into monotonic time; unmapped hardware clocks use receive time.
+            wall_to_monotonic = time.monotonic() - time.time()
+            capture_times = []
+            for frames, color, received in ((frames1, color_frame1, received1), (frames2, color_frame2, received2)):
+                pair = [color, frames.get_depth_frame()] if self.use_depth else [color]
+                mapped = all(frame.get_frame_timestamp_domain() in
+                             (rs.timestamp_domain.global_time, rs.timestamp_domain.system_time) for frame in pair)
+                capture_times.append(min(frame.get_timestamp() for frame in pair) / 1000 + wall_to_monotonic
+                                     if mapped else received)
+            result["capture_times"] = dict(zip(("camera1", "camera2"), capture_times))
+            result["receive_times"] = {"camera1": received1, "camera2": received2}
+            result["frame_info"] = [{
+                "serial": serial,
+                "color_frame": color.get_frame_number(), "color_ms": color.get_timestamp(),
+                "domain": str(color.get_frame_timestamp_domain()),
+                "depth_ms": frames.get_depth_frame().get_timestamp() if self.use_depth else None,
+            } for serial, color, frames in zip(self.connect_devices,
+                                               (color_frame1, color_frame2), (frames1, frames2))]
+        return result
 
     def stop(self):
         for pipeline in self.pipelines:

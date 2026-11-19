@@ -1,5 +1,5 @@
 import roslibpy
-
+import traceback
 from robokit.robots.robot_client_inovo import RobotClient
 from robokit.controllers.tele_control import PS5DualSenseIMUController
 
@@ -98,17 +98,90 @@ env_light_params = {
 # task_instruction = "Screw the bulb into the light socket, and turn on the light."
 # saving_root = "/home/geyuan/local_soft/TCL/1201_screw_bulb_turn_off/"
 # task_instruction = "Screw the bulb into the light socket, and turn off the light after the bulb is on."
+# saving_root = "/home/geyuan/local_soft/TCL/1201_screw_bulb_turn_off_table/"
+# task_instruction = "Screw the bulb into the light socket, and turn off the light after the bulb is on. [ENV:table]"
+# saving_root = "/home/geyuan/local_soft/TCL/1201_screw_bulb_turn_off_object/"
+# task_instruction = "Screw the bulb into the light socket, and turn off the light after the bulb is on. [ENV:object]"
+# saving_root = "/home/geyuan/local_soft/TCL/1201_screw_bulb_turn_off_light/"
+# task_instruction = "Screw the bulb into the light socket, and turn off the light after the bulb is on. [ENV:light]"
 
 
 ''' Tower '''
-saving_root = "/home/geyuan/local_soft/TCL/0209_tower_boby/"
-task_instruction = "Pick up the purple disc from the pole and place it on the sponge."
+# saving_root = "/home/geyuan/local_soft/TCL/0209_tower_boby/"
+# saving_root = "/home/geyuan/local_soft/TCL/0209_tower_boby_hard/"
+# saving_root = "/home/geyuan/local_soft/TCL/0209_tower_boby_easy/"
+# task_instruction = "Pick up the purple disc from the pole and place it on the sponge."
+# task_instruction = "Pick up the purple disc from the sponge and insert it onto the pole."
+
+''' Mouse '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_put_mouse/"
+# task_instruction = "Pick up the mouse from the wireless charger and place it onto the black mouse pad."
+# saving_root = "/home/geyuan/local_soft/TCL/0417_put_mouse_hard/"
+# task_instruction = "Pick up the mouse from the black mouse pad and place it onto the wireless charger."
+
+''' Ethernet cable '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_ethernet/"
+# task_instruction = "Plug the ethernet cable into the switch port."
+# saving_root = "/home/geyuan/local_soft/TCL/260514_ethernet/"
+# task_instruction = "Disconnect the ethernet cable from the `uplink` port, then insert it into port `1`."
+
+''' GreenYellowRed '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_greenyellowred/"
+# task_instruction = "Sequentially take off the three wooden blocks (green, yellow, and red) from the rod and place them on the black mouse pad."
+
+''' Test Tube '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_test_tube/"
+# task_instruction = "Pull out the test tube from the test tube rack"
+
+''' Test Tube '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_french_press/"
+# task_instruction = "Lift the lid off the French press and set it on the towel."
+
+''' Brush '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_brush/"
+# task_instruction = "Disassemble the brush and the dustpan"
+
+''' Plastic Egg '''
+# saving_root = "/home/geyuan/local_soft/TCL/0417_plastic_egg/"
+# task_instruction = "Pick the plastic egg and place it into the egg box."
+
+''' lh_tower '''
+# saving_root = "/home/geyuan/local_soft/TCL/1014_lh_tower_three_blocks/"
+# task_instruction = "Stack the wooden blocks onto the peg in the order: purple, red, yellow."
+
+''' battery '''
+# saving_root = "/home/geyuan/local_soft/TCL/1014_insert_two_batteries/"
+# saving_root = "/home/geyuan/local_soft/TCL/1014_insert_two_batteries_marked/"
+# task_instruction = "Insert the red battery into the battery box first, then insert the blue battery into the same box."
+
+''' lh_air_fryer '''
+# saving_root = "/home/geyuan/local_soft/TCL/1014_lh_air_fryer/"
+# task_instruction = "Grab and pick the bell pepper from the plate, place it into the air fryer basket, and then push the basket back in."
+
+''' Debug '''
+saving_root = "/home/geyuan/local_soft/TCL/tmp/"
+task_instruction = "Warning! this is a debug task!"
+
+''' lh_chemistry'''
+# saving_root = "/home/geyuan/local_soft/TCL/1029_lh_chemistry_leave/"
+# task_instruction = (
+#     "Perform an acid-base neutralization task: First, press down to toggle the power switch on and pick up the dropper."
+#     "Next, enter a titration loop—squeeze and slightly release the gripper to draw alkaline solution from the reservoir, "
+#     "lift the dropper over the reaction beaker, squeeze to dispense the liquid, and return the dropper to the storage beaker—repeating"
+#     "this cycle until the solution in the reaction beaker turns red. Once neutralized, release the dropper, return to the home"
+#     "configuration, close the gripper, and press down to turn off the power switch.")
+
+''' disk force 3 '''
+# saving_root = "/home/geyuan/local_soft/TCL/0731_disk_force_9/"
+# task_instruction = "Pick up the purple disc from the sponge and insert it onto the pole."
 
 env_params = env_source_params
 
 rc = RobotClient(client)
 controller = PS5DualSenseIMUController(
     robot=rc,
+    limited_gripper_open_ratio=0.25,  # default: 0.18; mode 2 opening ratio; left D-pad toggles mode
+    limited_gripper_max_effort=0,  # mode 2 effort limit for both opening and closing
     saving_root=saving_root,
     task_instruction=task_instruction,
     saving_workers=6,
@@ -119,10 +192,12 @@ controller = PS5DualSenseIMUController(
 try:
     controller.start()
 except Exception as e:
-    print(e)
+    print("Error: {}".format(e))
+    traceback.print_exc()
 except KeyboardInterrupt:
     print("用户按下 Ctrl+C，程序中断。")
 finally:
+    print("Please wait for all resources to be released...")
     controller.stop()
 
 print("OK!")

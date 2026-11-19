@@ -1,0 +1,18 @@
+camera:
+  resize_hw: [240, 320]
+
+policy:
+  cache_length: 24
+  state_fields:
+    - tcp_pose
+    - force
+  expected_state_dim: 12
+
+control:
+  gripper_sticky: 0
+  continuous_gripper: false
+  force_fz_limit: -7.5
+
+recording:
+  image_save_fn: tmp_saved_video.mp4
+

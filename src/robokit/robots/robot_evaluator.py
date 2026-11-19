@@ -1,6 +1,6 @@
 import time
 import os
-from typing import List
+from typing import List, Dict
 from tqdm import tqdm
 import numpy as np
 from PIL import Image
@@ -8,10 +8,34 @@ from PIL import Image
 from robokit.connects.service_connector import ServiceConnector
 from robokit.robots.robot_client_inovo import RobotClient
 from robokit.data_manager.realsense_handler import RealsenseHandler
-from robokit.data_manager.ft300_handler import FT300Handler
+from robokit.data_manager.ft300_handler import FT300Handler, FT300ModbusStream
 from robokit.data_manager.data_handler import DataHandler, ImageAsVideoSaver, ActionAsVideoSaver
 from robokit.debug_utils.images import concatenate_rgb_images
 from robokit.debug_utils.times import time_stat
+
+
+class ImageRingBuffer:
+    def __init__(self, capacity=24, shape=(480, 640, 3), dtype=np.uint8):
+        self.capacity = capacity
+        # 初始化时一次性分配好所有内存
+        self.buffer = np.zeros((capacity, *shape), dtype=dtype)
+        self.idx = 0
+        self.is_full = False
+
+    def append(self, frame):
+        # 原地覆写最旧的数据，不产生新的内存分配
+        self.buffer[self.idx] = frame
+        self.idx = (self.idx + 1) % self.capacity
+        if self.idx == 0:
+            self.is_full = True
+
+    def get_ordered_stack(self):
+        # 如果需要严格的时间顺序（最旧到最新）
+        if not self.is_full:
+            return self.buffer[:self.idx]
+        # np.roll 返回的是视图的重新排列，如果必须连续内存才拷贝
+        # 但很多操作直接对 roll 后的结果操作即可
+        return np.roll(self.buffer, -self.idx, axis=0)
 
 
 class RealWorldEvaluator:
@@ -28,21 +52,36 @@ class RealWorldEvaluator:
                  enable_auto_ae_wb: bool = True,
                  buffer_size: int = 1,
                  speed_scale: float = 0.75,
+                 gripper_sticky: int = 80,
+                 camera_skipping: int = 100,  # Skip frames at the beginning to let the camera warm up and stabilize
                  go_home_at_begin: bool = True,
+                 open_gripper_at_begin: bool = True,
                  reset_remote_api_at_begin: bool = True,
+                 sleep_frames_after_send: float = 0.,
                  # Save as video
                  image_save_speedup: float = 2.0,
                  image_save_fn: str = "tmp_saved_video.mp4",
                  action_save_flag: bool = False,
+                 continuous_gripper: bool = False,
+                 state_fields: list = None,
+                 expected_state_dim: int = None,
+                 force_fz_limit: float = -7.5,
+                 task_id: int = 0,
+                 stop_during_inference: bool = True,
                  ):
         self.connector = gpu_service_connector
         self.robot = robot
         self.cur_task_text = cur_task_text
+        self.task_id = task_id
         self.run_loops = run_loops
         self.img_hw = img_hw
         self.connector.resize_hw = resize_hw
         self.future_skip = future_skip
+        self.state_fields = ["tcp_pose", "force"] if state_fields is None else state_fields
+        self.expected_state_dim = expected_state_dim
+        self.force_fz_limit = force_fz_limit
         self.go_home_at_begin = go_home_at_begin
+        self.open_gripper_at_begin = open_gripper_at_begin
         self.reset_remote_api_at_begin = reset_remote_api_at_begin
         self.start_time = time.time()
 
@@ -57,20 +96,35 @@ class RealWorldEvaluator:
         self.camera.set_ae_wb_auto(enable_auto_ae_wb)
         if not enable_auto_ae_wb:
             self.camera.set_ae_wb(exposure=50)
+        self.camera_skipping = camera_skipping
 
         self.ftsensor = None  # create and calibrate after go_home in run()
 
         self.speed_scale = speed_scale
+        self.gripper_sticky = gripper_sticky
+        self.continuous_gripper = continuous_gripper
+        if continuous_gripper and gripper_sticky != 0:
+            print(f"[Warning] continuous_gripper enabled: gripper_sticky={gripper_sticky} is ignored.")
+        self.sleep_frames_after_send = sleep_frames_after_send
+        self.stop_during_inference = stop_during_inference
 
         # Dynamic variables
         self.step_cnt = 0
         self.g = 0.
-        self.frame_buffer = {
-            'primary_rgb': [],
-            'gripper_rgb': [],
-            'joint_state': [],
-        }  # some policies require 2 or more observation frames
+        buffer_hw = resize_hw or img_hw
+        self.frame_buffer: Dict[str, ImageRingBuffer] = {
+            'primary_rgb': ImageRingBuffer(capacity=buffer_size, shape=(*buffer_hw, 3)),
+            'gripper_rgb': ImageRingBuffer(capacity=buffer_size, shape=(*buffer_hw, 3)),
+        }
+        if self.state_fields:
+            state_dim = self._state_dim(self.state_fields)
+            if expected_state_dim is not None and state_dim != expected_state_dim:
+                raise ValueError(f"Configured state dim is {state_dim}, expected {expected_state_dim}.")
+            self.frame_buffer['joint_state'] = ImageRingBuffer(
+                capacity=buffer_size, shape=(state_dim,), dtype=np.float32)
+        # some policies require 2 or more observation frames
         self.buffer_size = buffer_size
+        self.last_gripper_close_step = None
 
         # Record
         self.log_time_delays = []
@@ -79,8 +133,9 @@ class RealWorldEvaluator:
         self.image_saver = ImageAsVideoSaver(
             buffer_size=run_loops,
             frame_rate=int(self.fps * self.image_save_speedup),
-            height=img_hw[0],
-            width=img_hw[1] * 2,
+            height=int(img_hw[0] / 1.5),  # TODO: resize to save memory
+            width=int(img_hw[1] / 1.5),  # no need to concat for multi-view image saver
+            n_cameras=2,
         )
         self.action_save_flag = action_save_flag
         self.action_save_fn = image_save_fn.replace('.mp4', '_action.mp4')
@@ -95,6 +150,8 @@ class RealWorldEvaluator:
         self.first_frame_time = None  # 第一帧的时间戳
         self.last_frame_time = None  # 上一帧的时间戳
         self.total_frames = 0  # 总帧数
+
+        print(f"[RealWorldEvaluator] using gripper_sticky={self.gripper_sticky}")
 
     def time_tick(self):
         self.start_time = time.time()
@@ -133,6 +190,7 @@ class RealWorldEvaluator:
               f"avg_fps={np.average(fps_lists)} FPS.")
 
     def run(self) -> float:
+        self._stop_jog()
         target_interval = 1. / self.fps  # 目标时间间隔
         last_execution_time = 0  # 上次执行时间
         max_inference_time = 0.
@@ -145,13 +203,13 @@ class RealWorldEvaluator:
             self.connector.send_reset(cur_task_text)
 
         # Force Sensor
-        self.ftsensor = FT300Handler()
+        self.ftsensor = FT300ModbusStream()
         if not self.ftsensor.connect(calibrate_samples=200):
             print("Failed to connect force torque sensor")
             exit()
 
-        for _ in tqdm(range(100), desc="Skipping frames:"):
-            self.capture_env_observation()
+        for _ in tqdm(range(self.camera_skipping), desc="Skipping frames:"):
+            frame_obs = self.capture_env_observation()
 
         while True:
             cycle_start_time = time.time()
@@ -164,87 +222,54 @@ class RealWorldEvaluator:
             # print(f"[Debug] Observation capture time: {obs_time * 1000:.1f}ms")
 
             # 2. 处理帧缓存（快速）
-            cur_primary_rgb = frame_obs['primary_rgb']
-            cur_gripper_rgb = frame_obs['gripper_rgb']
-            # cur_joint_state = frame_obs['robot_obs'].tolist()[7:13]  # Real joint_state
-            cur_joint_state = frame_obs['robot_obs'][:6]  # TCP pos as joint_state
-            cur_force = frame_obs['force']  # (6,)
-            cur_joint_state = np.concatenate([cur_joint_state, cur_force], axis=0)  # (12,)
+            def resize_frame(frame):
+                if self.connector.resize_hw is not None:
+                    return np.array(Image.fromarray(frame).resize((self.connector.resize_hw[1], self.connector.resize_hw[0])))
+                return frame
 
-            # if len(self.frame_buffer['primary_rgb']) == 0:
-            #     self.frame_buffer['primary_rgb'].append(cur_primary_rgb)
-            #     self.frame_buffer['gripper_rgb'].append(cur_gripper_rgb)
-            #     self.frame_buffer['joint_state'].append(cur_joint_state)
-            #     cur_primary_rgb = np.stack([np.zeros_like(cur_primary_rgb), cur_primary_rgb])
-            #     cur_gripper_rgb = np.stack([np.zeros_like(cur_gripper_rgb), cur_gripper_rgb])
-            #     cur_joint_state = [[0.] * len(cur_joint_state), cur_joint_state]
-            # elif len(self.frame_buffer['primary_rgb']) == 1:
-            #     self.frame_buffer['primary_rgb'].append(cur_primary_rgb)
-            #     self.frame_buffer['gripper_rgb'].append(cur_gripper_rgb)
-            #     self.frame_buffer['joint_state'].append(cur_joint_state)
-            #     cur_primary_rgb = np.stack(self.frame_buffer['primary_rgb'])
-            #     cur_gripper_rgb = np.stack(self.frame_buffer['gripper_rgb'])
-            #     cur_joint_state = self.frame_buffer['joint_state']
-            # else:
-            #     assert len(self.frame_buffer['primary_rgb']) == 2
-            #     cur_primary_rgb = np.stack(self.frame_buffer['primary_rgb'])
-            #     cur_gripper_rgb = np.stack(self.frame_buffer['gripper_rgb'])
-            #     cur_joint_state = list(self.frame_buffer['joint_state'])
-            #     self.frame_buffer['primary_rgb'].pop(0)
-            #     self.frame_buffer['gripper_rgb'].pop(0)
-            #     self.frame_buffer['joint_state'].pop(0)
+            cur_primary_rgb = resize_frame(frame_obs['primary_rgb'])
+            cur_gripper_rgb = resize_frame(frame_obs['gripper_rgb'])
+            # cur_joint_state = frame_obs['robot_obs'].tolist()[7:13]  # Real joint_state
+            cur_joint_state = self._build_policy_state(frame_obs)  # (D,) or None
 
             # --- 更新帧缓存 ---
-            # 如果未满，直接 append；满了先 pop 再 append
-            for key, val in zip(
-                    ['primary_rgb', 'gripper_rgb', 'joint_state'],
-                    [cur_primary_rgb, cur_gripper_rgb, cur_joint_state]
-            ):
-                if len(self.frame_buffer[key]) >= buffer_size:
-                    self.frame_buffer[key].pop(0)
-                self.frame_buffer[key].append(val)
-
-            # --- 构造输出, add pad before the data（长度一定为 buffer_size） ---
-            def pad_to_buffer(data_list, pad_with):
-                """
-                :return: (buffer_size,D) np.ndarray or List
-                """
-                padded = [pad_with for _ in range(buffer_size - len(data_list))] + data_list
-                return np.stack(padded) if isinstance(pad_with, np.ndarray) else padded
-
-            cur_primary_rgb = pad_to_buffer(
-                self.frame_buffer['primary_rgb'],
-                np.zeros_like(cur_primary_rgb)
-            )  # (T,H,W,C)
-            cur_gripper_rgb = pad_to_buffer(
-                self.frame_buffer['gripper_rgb'],
-                np.zeros_like(cur_gripper_rgb)
-            )
-            cur_joint_state = pad_to_buffer(
-                self.frame_buffer['joint_state'],
-                np.zeros_like(cur_joint_state)
-            )  # (T,D)
+            with time_stat("[DEBUG] Frame Buffer Update"):
+                frame_values = {
+                    'primary_rgb': cur_primary_rgb,
+                    'gripper_rgb': cur_gripper_rgb,
+                }
+                if cur_joint_state is not None:
+                    frame_values['joint_state'] = cur_joint_state
+                for key, val in frame_values.items():
+                    self.frame_buffer[key].append(val)
 
             # Save current image
-            saved_image = concatenate_rgb_images(
-                self.frame_buffer['primary_rgb'][-1],
-                self.frame_buffer['gripper_rgb'][-1],
-            )
-            self.image_saver.add_image(saved_image)  # last is current
+            # saved_image = concatenate_rgb_images(
+            #     self.frame_buffer['primary_rgb'][-1],
+            #     self.frame_buffer['gripper_rgb'][-1],
+            # )  # (H, 2*W, C)
+            with time_stat("[DEBUG] concat videos"):
+                saved_image_VT_H_W_C = np.concatenate([
+                    self.frame_buffer['primary_rgb'].get_ordered_stack()[-1:, :],  # (N,H,W,C) -> (1,H,W,C)
+                    self.frame_buffer['gripper_rgb'].get_ordered_stack()[-1:, :],  # (N,H,W,C) -> (1,H,W,C)
+                ], axis=0)  # (2,H,W,C)
+                self.image_saver.add_video(saved_image_VT_H_W_C)  # last is current
 
-            # 3. GPU推理（最慢：6秒左右）
-            inference_start = time.time()
-            action = self.connector.send_obs_and_get_action(
-                primary_rgb=cur_primary_rgb[None, :],  # (1,T,H,W,C) to List[str]
-                gripper_rgb=cur_gripper_rgb[None, :],
-                task_description=cur_task_text,
-                joint_state=cur_joint_state[None, :],  # (1,T,6+6)
-            )
-            inference_time = time.time() - inference_start
-            max_inference_time = max(max_inference_time, inference_time)
-            print(f"[Debug] GPU inference time: {inference_time * 1000:.1f}ms, max={max_inference_time * 1000:.1f}ms")
+            with time_stat("[DEBUG] send_obs_and_get_action"):
+                # 3. GPU推理（最慢：6秒左右）
+                inference_start = time.time()
+                joint_state = None if cur_joint_state is None else self.frame_buffer['joint_state'].get_ordered_stack()[None, :]
+                action = self.connector.send_obs_and_get_action(
+                    primary_rgb=self.frame_buffer['primary_rgb'].get_ordered_stack()[None, :],  # (1,T,H,W,C) to List[str]
+                    gripper_rgb=self.frame_buffer['gripper_rgb'].get_ordered_stack()[None, :],
+                    task_description=cur_task_text,
+                    joint_state=joint_state,  # (B,T,D), or None for image-only policies
+                )
+                inference_time = time.time() - inference_start
+                max_inference_time = max(max_inference_time, inference_time)
+                print(f"[Debug] GPU inference time: {inference_time * 1000:.1f}ms, max={max_inference_time * 1000:.1f}ms")
 
-            assert action.shape[-1] == 7, f"action.shape[-1]={action.shape} is not (:,7)"
+                assert action.shape[-1] == 7, f"action.shape[-1]={action.shape} is not (:,7)"
 
             ## Slow down when the height is too low
             # safe_min_z = 0.2
@@ -258,6 +283,14 @@ class RealWorldEvaluator:
             # for h in range(action[0].shape[0]):
             #     action[0, h, 3] = 0.
             #     action[0, h, 4] = 0.
+
+            # Fallback when force fz is too large
+            fz = frame_obs['force'][2]
+            if self.force_fz_limit is not None and fz < self.force_fz_limit:  # 过大说明可能撞到了
+                print("[Debug] force fz:", fz)
+                for h in range(action[0].shape[0]):
+                    if action[0, h, 2] < 0.:
+                        action[0, h, 2] = -1. * action[0, h, 2]
 
             # 4. Conduct action in real-world environment, FPS control
             current_time = time.time()
@@ -278,12 +311,22 @@ class RealWorldEvaluator:
             execution_start = time.time()
             last_execution_time = execution_start
 
-            print("[Info]", self.step_cnt, self.format_array(action), "\n",
-                  self.format_array(np.array(cur_joint_state)), cur_task_text[:20])
+            print("[Info]", self.step_cnt, cur_task_text[:20], f"sleep_frames: {self.sleep_frames_after_send}")
 
             with time_stat("Robot Action Execution"):
                 self.step(action_D=action[0, 0, :])
-                self.on_gripper_move()
+                # TODO: HOTFIX: force to close gripper in the first 400 frames
+                if self.step_cnt >= 60:
+                    self.on_gripper_move()
+                # The connector increments send_cnt when returning an action.
+                chunk_finished = self.connector.send_cnt % self.connector.max_cache_actions == 0
+                run_finished = self.step_cnt + 1 >= self.run_loops
+                if chunk_finished or run_finished:
+                    time.sleep(self.sleep_frames_after_send / self.fps)
+                    # Optionally preserve the last jog before observation capture and HTTP wait.
+                    # Run completion always stops, independently of the inference setting.
+                    if run_finished or self.stop_during_inference:
+                        self._stop_jog()
             self.action_saver.add_action(action[0, 0, :])
 
             execution_time = time.time() - execution_start
@@ -304,6 +347,55 @@ class RealWorldEvaluator:
     def format_array(arr):
         return np.array2string(arr, formatter={'float_kind': lambda x: f"{x:.6f}"})
 
+    @staticmethod
+    def _state_dim(state_fields: list) -> int:
+        """Return the concatenated dimension of configured state fields."""
+        dims = {
+            "tcp_xyz": 3,
+            "tcp_abc": 3,
+            "tcp_pose": 6,
+            "gripper_width": 1,
+            "joint_positions": 6,
+            "gripper_moving_to": 1,
+            "force": 6,
+            "task_id": 1,
+        }
+        total_dim = 0
+        for field in state_fields:
+            name = field if isinstance(field, str) else field["name"]
+            if name == "zeros":
+                total_dim += int(field["dim"])
+            else:
+                if name not in dims:
+                    raise ValueError(f"Unknown state field: {name}")
+                total_dim += dims[name]
+        return total_dim
+
+    def _build_policy_state(self, frame_obs: dict):
+        """Build one policy state vector with shape ``(D,)`` from raw observations."""
+        if not self.state_fields:
+            return None
+        robot_obs = frame_obs['robot_obs']
+        components = {
+            "tcp_xyz": robot_obs[:3],
+            "tcp_abc": robot_obs[3:6],
+            "tcp_pose": robot_obs[:6],
+            "gripper_width": robot_obs[6:7],
+            "joint_positions": robot_obs[7:13],
+            "gripper_moving_to": robot_obs[13:14],
+            "force": frame_obs['force'],
+            # Keep the task id as one scalar feature per observation frame.
+            "task_id": [self.task_id],
+        }
+        values = []
+        for field in self.state_fields:
+            name = field if isinstance(field, str) else field["name"]
+            if name == "zeros":
+                values.append(np.zeros(int(field["dim"]), dtype=np.float32))
+            else:
+                values.append(np.asarray(components[name], dtype=np.float32))
+        return np.concatenate(values, axis=0)
+
     def capture_env_observation(self) -> dict:
         # camera_data = self.camera.capture_frames()
         robot_data_time = time.time()
@@ -319,7 +411,7 @@ class RealWorldEvaluator:
             robot_data['gripper_width'],
             robot_data['joint_states'][0],
             robot_data['joint_states'][1],
-            robot_data['joint_states'][2],
+            robot_data['joint_states'][2], # - 0.02,  # TODO: hotfix
             robot_data['joint_states'][3],
             robot_data['joint_states'][4],
             robot_data['joint_states'][5],
@@ -356,23 +448,30 @@ class RealWorldEvaluator:
         action[0] *= self.speed_scale
         action[1] *= self.speed_scale
         action[2] *= self.speed_scale
-        action[3] = min(float(action[3]), 1.)
-        action[4] = min(float(action[4]), 1.)
-        action[5] = min(float(action[5]), 1.)
-        action[3] = max(float(action[3]), -1.)
-        action[4] = max(float(action[4]), -1.)
-        action[5] = max(float(action[5]), -1.)
+        ## TODO: why this?
+        # action[3] = min(float(action[3]), 1.)
+        # action[4] = min(float(action[4]), 1.)
+        # action[5] = min(float(action[5]), 1.)
+        # action[3] = max(float(action[3]), -1.)
+        # action[4] = max(float(action[4]), -1.)
+        # action[5] = max(float(action[5]), -1.)
 
         linear_xyz = {'x': action[0], 'y': action[1], 'z': action[2]}
         angular_xyz = {'x': action[3], 'y': action[4], 'z': action[5]}
 
-        self.g = float(action[6])
-        # if abs(action[3]) + abs(action[4]) + abs(action[5]) > abs(action[0]) + abs(action[1]) + abs(action[2]):
-        #     self.robot.ang_jog_pub(angular_xyz)
-        #     print("angular")
-        # else:
-        #     self.robot.linear_jog_pub(linear_xyz)
-        #     print("linear")
+        target_g = float(action[6])
+
+        if self.continuous_gripper:
+            self.g = max(min(target_g, 1.0), 0.0)
+        else:
+            target_g_binary = 1.0 if target_g > 0.5 else 0.0
+            if not hasattr(self, '_last_g_change_step'):
+                self._last_g_change_step = -100
+            # Sticky applies only to binary open/close transitions.
+            if target_g_binary != self.g and (self.step_cnt - self._last_g_change_step) >= self.gripper_sticky:
+                self.g = target_g_binary
+                self._last_g_change_step = self.step_cnt
+
         self.robot.lin_ang_jog_pub(
             linear_xyz,
             angular_xyz,
@@ -380,25 +479,35 @@ class RealWorldEvaluator:
 
     def on_gripper_move(self, g: float = None) -> None:
         self.g = g if g is not None else self.g
-        self.robot.gripper_set_pub(self.g)
+        self.robot.gripper_set_pub(self.g, continuous=self.continuous_gripper)
 
     def reset(self):
         # return
         # Sanity check for gripper
         # self.robot.gripper_set_pub(1)
         # time.sleep(0.5)
-        self.robot.gripper_set_pub(0)
-        time.sleep(1.5)
+
+        if self.open_gripper_at_begin:
+            self.robot.gripper_set_pub(0)
+            time.sleep(1.5)
 
         # Go back home
         if self.go_home_at_begin:
             self.robot.joint_back_home()
+
+    def _stop_jog(self):
+        """Clear arm jog commands while preserving the gripper target."""
+        zero = dict(x=0.0, y=0.0, z=0.0)
+        self.robot.lin_ang_jog_pub(zero, zero)
 
     def stop(self):
         ## Just for coffee task
         # self.robot.gripper_set_pub(0)
         # time.sleep(1.5)
         # self.robot.joint_back_coffee()
+
+        self._stop_jog()
+        time.sleep(1.5)
 
         self.robot.stop()
         self.camera.stop()

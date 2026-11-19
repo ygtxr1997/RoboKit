@@ -24,8 +24,11 @@ def preprocess(opts):
     print("Save and load statistics info")
     statistics_json_path = "statistics.json"
 
+    keys_to_extract = ["rel_actions"]
+    if "gripper_max_effort" in dataset.load_keys:
+        keys_to_extract.append("gripper_max_effort")
     _ = dataset.extract_data_and_compute_statistics(
-        keys_to_extract=["rel_actions"],
+        keys_to_extract=keys_to_extract,
         save_json_path=statistics_json_path,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -33,7 +36,7 @@ def preprocess(opts):
 
     # _ = dataset.get_statistics_and_save(
     #     save_json_path=statistics_json_path, batch_size=batch_size, num_workers=num_workers)
-    meta_info = dataset.load_statistics_from_json(json_path=statistics_json_path)
+    meta_info = dataset.load_meta_from_json(json_path=statistics_json_path)
     print(meta_info)
 
     # 3. Extract data_manager by key
@@ -73,8 +76,11 @@ def convert_to_hdf5(opts):
     print("Save and load statistics info")
     statistics_json_path = "statistics.json"
 
+    keys_to_extract = ["rel_actions", "robot_obs", "force_torque"]
+    if "gripper_max_effort" in converter.load_keys:
+        keys_to_extract.append("gripper_max_effort")
     _ = converter.extract_data_and_compute_statistics(
-        keys_to_extract=["rel_actions", "robot_obs", "force_torque"],  # in [`rel_actions`, `robot_obs`, `force_torque`]
+        keys_to_extract=keys_to_extract,
         save_json_path=statistics_json_path,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -94,7 +100,7 @@ def convert_to_hdf5(opts):
     h5_dataset = TCLDatasetHDF5(
         data_root,
         opts.as_hdf5,
-        load_keys=["primary_rgb", "gripper_rgb", "language_text", "rel_actions", "robot_obs", "force_torque"],
+        load_keys=["primary_rgb", "gripper_rgb", "language_text"] + keys_to_extract,
         use_h5=True,
         is_img_decoded_in_h5=False,
     )
