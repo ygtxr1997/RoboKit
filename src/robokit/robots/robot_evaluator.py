@@ -63,14 +63,23 @@ class RealWorldEvaluator:
                  image_save_fn: str = "tmp_saved_video.mp4",
                  action_save_flag: bool = False,
                  continuous_gripper: bool = False,
+                 state_fields: list = None,
+                 expected_state_dim: int = None,
+                 force_fz_limit: float = -7.5,
+                 task_id: int = 0,
+                 stop_during_inference: bool = True,
                  ):
         self.connector = gpu_service_connector
         self.robot = robot
         self.cur_task_text = cur_task_text
+        self.task_id = task_id
         self.run_loops = run_loops
         self.img_hw = img_hw
         self.connector.resize_hw = resize_hw
         self.future_skip = future_skip
+        self.state_fields = ["tcp_pose", "force"] if state_fields is None else state_fields
+        self.expected_state_dim = expected_state_dim
+        self.force_fz_limit = force_fz_limit
         self.go_home_at_begin = go_home_at_begin
         self.open_gripper_at_begin = open_gripper_at_begin
         self.reset_remote_api_at_begin = reset_remote_api_at_begin
@@ -97,15 +106,23 @@ class RealWorldEvaluator:
         if continuous_gripper and gripper_sticky != 0:
             print(f"[Warning] continuous_gripper enabled: gripper_sticky={gripper_sticky} is ignored.")
         self.sleep_frames_after_send = sleep_frames_after_send
+        self.stop_during_inference = stop_during_inference
 
         # Dynamic variables
         self.step_cnt = 0
         self.g = 0.
+        buffer_hw = resize_hw or img_hw
         self.frame_buffer: Dict[str, ImageRingBuffer] = {
-            'primary_rgb': ImageRingBuffer(capacity=buffer_size, shape=(resize_hw[0], resize_hw[1], 3)),
-            'gripper_rgb': ImageRingBuffer(capacity=buffer_size, shape=(resize_hw[0], resize_hw[1], 3)),
-            'joint_state': ImageRingBuffer(capacity=buffer_size, shape=(12,), dtype=np.float32),
-        }  # some policies require 2 or more observation frames
+            'primary_rgb': ImageRingBuffer(capacity=buffer_size, shape=(*buffer_hw, 3)),
+            'gripper_rgb': ImageRingBuffer(capacity=buffer_size, shape=(*buffer_hw, 3)),
+        }
+        if self.state_fields:
+            state_dim = self._state_dim(self.state_fields)
+            if expected_state_dim is not None and state_dim != expected_state_dim:
+                raise ValueError(f"Configured state dim is {state_dim}, expected {expected_state_dim}.")
+            self.frame_buffer['joint_state'] = ImageRingBuffer(
+                capacity=buffer_size, shape=(state_dim,), dtype=np.float32)
+        # some policies require 2 or more observation frames
         self.buffer_size = buffer_size
         self.last_gripper_close_step = None
 
@@ -173,6 +190,7 @@ class RealWorldEvaluator:
               f"avg_fps={np.average(fps_lists)} FPS.")
 
     def run(self) -> float:
+        self._stop_jog()
         target_interval = 1. / self.fps  # 目标时间间隔
         last_execution_time = 0  # 上次执行时间
         max_inference_time = 0.
@@ -212,16 +230,17 @@ class RealWorldEvaluator:
             cur_primary_rgb = resize_frame(frame_obs['primary_rgb'])
             cur_gripper_rgb = resize_frame(frame_obs['gripper_rgb'])
             # cur_joint_state = frame_obs['robot_obs'].tolist()[7:13]  # Real joint_state
-            cur_joint_state = frame_obs['robot_obs'][:6]  # TCP pos as joint_state
-            cur_force = frame_obs['force']  # (6,)
-            cur_joint_state = np.concatenate([cur_joint_state, cur_force], axis=0)  # (12,)
+            cur_joint_state = self._build_policy_state(frame_obs)  # (D,) or None
 
             # --- 更新帧缓存 ---
             with time_stat("[DEBUG] Frame Buffer Update"):
-                for key, val in zip(
-                        ['primary_rgb', 'gripper_rgb', 'joint_state'],
-                        [cur_primary_rgb, cur_gripper_rgb, cur_joint_state]
-                ):
+                frame_values = {
+                    'primary_rgb': cur_primary_rgb,
+                    'gripper_rgb': cur_gripper_rgb,
+                }
+                if cur_joint_state is not None:
+                    frame_values['joint_state'] = cur_joint_state
+                for key, val in frame_values.items():
                     self.frame_buffer[key].append(val)
 
             # Save current image
@@ -239,11 +258,12 @@ class RealWorldEvaluator:
             with time_stat("[DEBUG] send_obs_and_get_action"):
                 # 3. GPU推理（最慢：6秒左右）
                 inference_start = time.time()
+                joint_state = None if cur_joint_state is None else self.frame_buffer['joint_state'].get_ordered_stack()[None, :]
                 action = self.connector.send_obs_and_get_action(
                     primary_rgb=self.frame_buffer['primary_rgb'].get_ordered_stack()[None, :],  # (1,T,H,W,C) to List[str]
                     gripper_rgb=self.frame_buffer['gripper_rgb'].get_ordered_stack()[None, :],
                     task_description=cur_task_text,
-                    joint_state=self.frame_buffer['joint_state'].get_ordered_stack()[None, :],  # (B,T,6+6)
+                    joint_state=joint_state,  # (B,T,D), or None for image-only policies
                 )
                 inference_time = time.time() - inference_start
                 max_inference_time = max(max_inference_time, inference_time)
@@ -266,7 +286,7 @@ class RealWorldEvaluator:
 
             # Fallback when force fz is too large
             fz = frame_obs['force'][2]
-            if fz < -7.5:  # 过大说明可能撞到了, 给 z 加一个反向的动作补偿
+            if self.force_fz_limit is not None and fz < self.force_fz_limit:  # 过大说明可能撞到了
                 print("[Debug] force fz:", fz)
                 for h in range(action[0].shape[0]):
                     if action[0, h, 2] < 0.:
@@ -298,11 +318,15 @@ class RealWorldEvaluator:
                 # TODO: HOTFIX: force to close gripper in the first 400 frames
                 if self.step_cnt >= 60:
                     self.on_gripper_move()
-                if self.connector.just_send:
-                    time.sleep(self.sleep_frames_after_send * 1. / self.fps)  # TODO: force to wait the action has been executed
-                    tmp_ee_action = np.zeros_like(action[:1, :1, :])
-                    tmp_ee_action[0, 0, -1] = action[0, 0, -1]
-                    self.step(action_D=tmp_ee_action[0, 0, :])  # 停止动作，保持在当前状态
+                # The connector increments send_cnt when returning an action.
+                chunk_finished = self.connector.send_cnt % self.connector.max_cache_actions == 0
+                run_finished = self.step_cnt + 1 >= self.run_loops
+                if chunk_finished or run_finished:
+                    time.sleep(self.sleep_frames_after_send / self.fps)
+                    # Optionally preserve the last jog before observation capture and HTTP wait.
+                    # Run completion always stops, independently of the inference setting.
+                    if run_finished or self.stop_during_inference:
+                        self._stop_jog()
             self.action_saver.add_action(action[0, 0, :])
 
             execution_time = time.time() - execution_start
@@ -322,6 +346,55 @@ class RealWorldEvaluator:
     @staticmethod
     def format_array(arr):
         return np.array2string(arr, formatter={'float_kind': lambda x: f"{x:.6f}"})
+
+    @staticmethod
+    def _state_dim(state_fields: list) -> int:
+        """Return the concatenated dimension of configured state fields."""
+        dims = {
+            "tcp_xyz": 3,
+            "tcp_abc": 3,
+            "tcp_pose": 6,
+            "gripper_width": 1,
+            "joint_positions": 6,
+            "gripper_moving_to": 1,
+            "force": 6,
+            "task_id": 1,
+        }
+        total_dim = 0
+        for field in state_fields:
+            name = field if isinstance(field, str) else field["name"]
+            if name == "zeros":
+                total_dim += int(field["dim"])
+            else:
+                if name not in dims:
+                    raise ValueError(f"Unknown state field: {name}")
+                total_dim += dims[name]
+        return total_dim
+
+    def _build_policy_state(self, frame_obs: dict):
+        """Build one policy state vector with shape ``(D,)`` from raw observations."""
+        if not self.state_fields:
+            return None
+        robot_obs = frame_obs['robot_obs']
+        components = {
+            "tcp_xyz": robot_obs[:3],
+            "tcp_abc": robot_obs[3:6],
+            "tcp_pose": robot_obs[:6],
+            "gripper_width": robot_obs[6:7],
+            "joint_positions": robot_obs[7:13],
+            "gripper_moving_to": robot_obs[13:14],
+            "force": frame_obs['force'],
+            # Keep the task id as one scalar feature per observation frame.
+            "task_id": [self.task_id],
+        }
+        values = []
+        for field in self.state_fields:
+            name = field if isinstance(field, str) else field["name"]
+            if name == "zeros":
+                values.append(np.zeros(int(field["dim"]), dtype=np.float32))
+            else:
+                values.append(np.asarray(components[name], dtype=np.float32))
+        return np.concatenate(values, axis=0)
 
     def capture_env_observation(self) -> dict:
         # camera_data = self.camera.capture_frames()
@@ -422,13 +495,18 @@ class RealWorldEvaluator:
         if self.go_home_at_begin:
             self.robot.joint_back_home()
 
+    def _stop_jog(self):
+        """Clear arm jog commands while preserving the gripper target."""
+        zero = dict(x=0.0, y=0.0, z=0.0)
+        self.robot.lin_ang_jog_pub(zero, zero)
+
     def stop(self):
         ## Just for coffee task
         # self.robot.gripper_set_pub(0)
         # time.sleep(1.5)
         # self.robot.joint_back_coffee()
 
-        self.step(action_D=np.zeros((7,)))  # 停止动作，保持在当前状态
+        self._stop_jog()
         time.sleep(1.5)
 
         self.robot.stop()

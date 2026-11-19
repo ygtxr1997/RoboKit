@@ -139,16 +139,10 @@ class ServiceConnector:
                 # gt_video = self.resize_video(gt_video)
                 pass  # No need to resize again, we resized in each frame loop
 
+            joint_state_shape = None if joint_state is None else joint_state.shape
             print(f"[ServiceConnector] sending frames, i={self.send_cnt}, per={self.max_cache_actions}, "
                   f"i%per={self.send_cnt % self.max_cache_actions}, gt_video_shape={gt_video.shape}, "
-                  f"joint_state_shape={joint_state.shape}")
-
-            if joint_state.shape[-1] == 6:  # only contains TCP xyz + abc
-                B, T, D = joint_state.shape
-                joint_state = np.concatenate((joint_state, np.zeros((B, T, 2))), axis=-1)
-            elif joint_state.shape[-1] == 12:  # TCP xyz-abc 6 + force 6
-                pass
-            assert joint_state.shape[-1] in (8, 12), "Joint state should be 8/12-dim."
+                  f"joint_state_shape={joint_state_shape}")
 
             with time_stat("[DEBUG] ServiceConnector encode_from_raw"):
                 request_to_policy = StepRequestFromEvaluator.encode_from_raw(

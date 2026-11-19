@@ -68,6 +68,7 @@ class BaseController:
         self.on_back_home()
 
         self.game_state = GameState.INIT
+        self._back_home_request = False
 
         # Cameras
         self.camera = RealsenseHandler(frame_rate=60)
@@ -111,7 +112,6 @@ class BaseController:
         self.basic_linear_scale = self.linear_scale
         self.basic_angular_scale = self.angular_scale
 
-        back_home_pressed = False
         start_episode_pressed = False
         end_episode_pressed = False
         previous_hat_x = 0
@@ -127,7 +127,7 @@ class BaseController:
                         self.switch_pause()
                         toggle_flag = True  # 状态切换后标记为已切换
                     elif event.button == self.get_back_home_button():
-                        back_home_pressed = True
+                        self.on_back_home_button_down()
                     elif event.button == self.get_start_episode_button():
                         start_episode_pressed = True
                     elif event.button == self.get_end_episode_button():
@@ -136,6 +136,8 @@ class BaseController:
                 elif event.type == pygame.JOYBUTTONUP:
                     if event.button == self.get_pause_button():
                         toggle_flag = False  # 当按钮释放时允许再次切换
+                    elif event.button == self.get_back_home_button():
+                        self.on_back_home_button_up()
                     elif event.button == self.get_angular_button():
                         self.on_angular_button_released()
 
@@ -154,6 +156,7 @@ class BaseController:
                             self.on_hat_pressed(3)
                         previous_hat_x = x
 
+            self.update_back_home_button(current_time)
 
             self.update_state()
             self.update_xyz()
@@ -194,22 +197,23 @@ class BaseController:
                 if self.game_state == GameState.PAUSED:
                     pass
                 else:
-                    if back_home_pressed:
-                        back_home_pressed = False
+                    if self._back_home_request:
+                        self._back_home_request = False
                         self.on_back_home()
 
-                    # Check XYZ Move
-                    zero_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
-                    if self.is_linear_jog_pressed():
-                        self.on_linear_jog()
-                    elif self.is_angular_jog_pressed():
-                        self.on_angular_jog()
-                    else:
-                        self.on_linear_jog(zero_xyz, z_39=0.)
-                        self.on_angular_jog(zero_xyz, z_39=0.)
+                    if not self.on_automatic_control():
+                        # Check XYZ Move
+                        zero_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+                        if self.is_linear_jog_pressed():
+                            self.on_linear_jog()
+                        elif self.is_angular_jog_pressed():
+                            self.on_angular_jog()
+                        else:
+                            self.on_linear_jog(zero_xyz, z_39=0.)
+                            self.on_angular_jog(zero_xyz, z_39=0.)
 
-                    # Check Gripper
-                    self.on_gripper_move()
+                        # Check Gripper
+                        self.on_gripper_move()
 
                     # Check Episode start end
                     if start_episode_pressed:
@@ -242,6 +246,12 @@ class BaseController:
                     task_instruction = self.task_instruction  # "pick up the banana"
                     start_time = pygame.time.get_ticks()
                     robot_data = self.robot.get_current_frame_info()
+                    if robot_data['gripper_max_effort'] is None:
+                        raise ValueError("Cannot save gripper_max_effort before a gripper command is published")
+                    # Save the applied command, not the mode selected for the next trigger edge.
+                    gripper_max_effort_D = np.array(
+                        [robot_data['gripper_max_effort']], dtype=np.float32,
+                    )  # (1,)
                     # print("[DEBUG] Get robot data_manager cost:", pygame.time.get_ticks() - start_time)
 
                     # # Note: if not set linear_jog to zero, will save wrong data_manager
@@ -299,6 +309,7 @@ class BaseController:
                         "rel_actions": frame_rel_actions,
                         "robot_obs": frame_robot_obs,
                         "force_torque": frame_force_torque,
+                        "gripper_max_effort": gripper_max_effort_D,
                     }
 
                     save_fn = f"{self.saving_frame_idx:06d}.npz"  # data_manager will handle the filename
@@ -379,6 +390,22 @@ class BaseController:
     def on_after_exit(self) -> None: pass
     def on_angular_button_released(self) -> None: pass
     def on_large_force_detected(self, force_val: float) -> None: pass
+
+    def on_back_home_button_down(self) -> None:
+        """Request the default home action when the back-home button is pressed."""
+        self._back_home_request = True
+
+    def on_back_home_button_up(self) -> None:
+        """Handle release of the back-home button."""
+        pass
+
+    def update_back_home_button(self, current_time: int) -> None:
+        """Update button-duration state before processing the next control frame."""
+        pass
+
+    def on_automatic_control(self) -> bool:
+        """Run an automatic controller and return whether manual input is blocked."""
+        return False
 
     def on_back_home(self) -> None:
         self.robot.joint_back_home()
@@ -684,45 +711,172 @@ class PS5DualSenseController(BaseController):
 
 
 
+class AutoVerticalTeleopManager:
+    """Handle X-button timing and fixed-xyz vertical TCP orientation recovery."""
+
+    LONG_PRESS_MS = 2500
+    ANGULAR_SPEED = 0.3
+    ORIENTATION_TOLERANCE = np.deg2rad(2.0)
+
+    def __init__(self, robot: RobotClient):
+        self.robot = robot
+        self._pressed_at = None
+        self._long_press_consumed = False
+        self._active = False
+        self._target_yaw = None
+
+    def button_down(self, current_time: int) -> None:
+        """Start measuring a new X-button press."""
+        self._pressed_at = current_time
+        self._long_press_consumed = False
+
+    def button_up(self) -> None:
+        """Start vertical recovery for a short X-button press."""
+        if self._pressed_at is None or self._long_press_consumed:
+            self._pressed_at = None
+            return
+
+        current_rpy = np.asarray(self.robot.get_tcp_orientation('euler_radius'))
+        self._target_yaw = float(current_rpy[2])
+        self._active = True
+        self._pressed_at = None
+
+    def update_button(self, current_time: int) -> bool:
+        """Return whether a newly completed long press should invoke home."""
+        if self._pressed_at is None or self._long_press_consumed:
+            return False
+        if current_time - self._pressed_at < self.LONG_PRESS_MS:
+            return False
+
+        self._long_press_consumed = True
+        self._pressed_at = None
+        self._active = False
+        return True
+
+    def is_active(self) -> bool:
+        """Return whether automatic vertical recovery is still running."""
+        return self._active
+
+    def get_angular_command(self, angular_scale: float):
+        """Return one fixed-speed angular jog command, or ``None`` when inactive."""
+        if not self._active:
+            return None
+
+        current_rpy = np.asarray(self.robot.get_tcp_orientation('euler_radius'))
+        # tcp_back_home() uses quaternion (1, 0, 0, 0), which is
+        # Euler xyz = (pi, 0, 0). Keep the release yaw unchanged.
+        target_rpy = np.array([np.pi, 0.0, self._target_yaw])
+        error_rpy = target_rpy - current_rpy
+        error_rpy = (error_rpy + np.pi) % (2 * np.pi) - np.pi
+        error_norm = np.linalg.norm(error_rpy)
+        if error_norm <= self.ORIENTATION_TOLERANCE:
+            self._active = False
+            return {'x': 0.0, 'y': 0.0, 'z': 0.0}
+
+        # The existing IMU path maps raw x/y to robot y/x.  Build the
+        # inverse command here so automatic and human commands share units.
+        raw_speed = self.ANGULAR_SPEED / max(abs(angular_scale), 1e-8)
+        direction = error_rpy / error_norm
+        return {
+            'x': -direction[1] * raw_speed,
+            'y': direction[0] * raw_speed,
+            'z': direction[2] * raw_speed,
+        }
+
+
 class PS5DualSenseIMUController(PS5DualSenseController):
     def __init__(self, robot: RobotClient, joystick_idx: int = 0,
                  saving_root: str = "collected_data_0422/",
                  limited_gripper_open_ratio: float = 0.1,
+                 limited_gripper_max_effort: float = 30.0,
                  **kwargs
                  ):
         if not 0.0 <= limited_gripper_open_ratio <= 1.0:
             raise ValueError("limited_gripper_open_ratio must be in [0, 1]")
         self.limited_gripper_open_ratio = float(limited_gripper_open_ratio)
+        self.limited_gripper_max_effort = float(limited_gripper_max_effort)
         self.limited_gripper_mode = False
         self._gripper_pressed = False
         self._gripper_target = 0.0
+        self._gripper_max_effort = 85.0
         PS5DualSenseController.__init__(self, robot, joystick_idx=joystick_idx,
                                      saving_root=saving_root, **kwargs)
         self.imu_controller = RawIMUHandler()
         self.angular_scale = .4  # fps20:0.2, fps30:0.4, now:0.35
-        print("[Gripper] mode 1: opening 100%; left D-pad toggles mode for the next release")
+        self.auto_teleop_manager = AutoVerticalTeleopManager(robot)
+        print("[Gripper] mode 1: opening 100%, max_effort=85; left D-pad toggles mode; "
+              "effort applies on next trigger press/release, opening on release")
+
+    def on_back_home_button_down(self) -> None:
+        """Start the three-second X-button long-press timer."""
+        self.auto_teleop_manager.button_down(pygame.time.get_ticks())
+
+    def on_back_home_button_up(self) -> None:
+        """Enter automatic vertical recovery when X was released early."""
+        self.auto_teleop_manager.button_up()
+
+    def update_back_home_button(self, current_time: int) -> None:
+        """Convert a completed long X press into the existing home request."""
+        if self.auto_teleop_manager.update_button(current_time):
+            self._back_home_request = True
+
+    def _publish_imu_angular_jog(self, linear_xyz: dict, angular_xyz: dict) -> None:
+        """Publish a jog using the same axes and units as manual IMU control."""
+        scaled_linear_xyz = {k: v * self.linear_scale for k, v in linear_xyz.items()}
+        scaled_angular_xyz = angular_xyz.copy()
+        scaled_angular_xyz['x'] = angular_xyz['y']
+        scaled_angular_xyz['y'] = -angular_xyz['x']
+        scaled_angular_xyz = {
+            k: v * self.angular_scale for k, v in scaled_angular_xyz.items()
+        }
+        self.robot.lin_ang_jog_pub(
+            linear_message=scaled_linear_xyz,
+            angular_message=scaled_angular_xyz,
+        )
+
+    def on_automatic_control(self) -> bool:
+        """Send one automatic recovery command while blocking manual input."""
+        was_active = self.auto_teleop_manager.is_active()
+        angular_xyz = self.auto_teleop_manager.get_angular_command(self.angular_scale)
+        if angular_xyz is None:
+            return False
+        zero_xyz = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+        self._publish_imu_angular_jog(zero_xyz, angular_xyz)
+        if was_active and not self.auto_teleop_manager.is_active():
+            # Match the feedback used for episode start/end after recovery finishes.
+            self.on_rumble()
+        return True
 
     def on_hat_pressed(self, hat_direction: int = -1) -> None:
-        """Toggle the next gripper opening mode with the left D-pad."""
+        """Select opening and effort settings for the next trigger action."""
         if hat_direction != 9:
             super().on_hat_pressed(hat_direction)
             return
         self.limited_gripper_mode = not self.limited_gripper_mode
         ratio = self.limited_gripper_open_ratio if self.limited_gripper_mode else 1.0
+        max_effort = self.limited_gripper_max_effort if self.limited_gripper_mode else 85.0
         mode = 2 if self.limited_gripper_mode else 1
-        print(f"[Gripper] mode {mode}: opening {ratio:.0%}; applies on next trigger release")
+        print(f"[Gripper] mode {mode}: opening {ratio:.0%}, max_effort={max_effort:g}; "
+              "effort applies on next trigger press/release, opening on release")
 
     def on_gripper_move(self, g: float = None) -> None:
-        """Apply the selected opening limit only on a trigger release."""
+        """Apply effort on trigger edges and the opening limit on release."""
         self.g = g if g is not None else self.g
         pressed = self.g > 0.5
+        # Latch effort on trigger edges so selecting a mode preserves holding force.
+        if pressed != self._gripper_pressed:
+            self._gripper_max_effort = (
+                self.limited_gripper_max_effort if self.limited_gripper_mode else 85.0
+            )
         if pressed:
             self._gripper_target = 1.0
         elif self._gripper_pressed:
             ratio = self.limited_gripper_open_ratio if self.limited_gripper_mode else 1.0
             self._gripper_target = 1.0 - ratio
         # Called only while running: mode changes alone never move the gripper.
-        self.robot.gripper_set_pub(self._gripper_target, continuous=True)
+        self.robot.gripper_set_pub(
+            self._gripper_target, continuous=True, max_effort=self._gripper_max_effort,
+        )
         self._gripper_pressed = pressed
 
     def update_xyz(self):
@@ -754,8 +908,6 @@ class PS5DualSenseIMUController(PS5DualSenseController):
 
     def on_angular_jog(self, xyz: dict = None, z_39: float = None) -> None:
         """ Also let linear axes move """
-        linear_scaled_xyz = {k: v * self.linear_scale for k, v in self.linear_xyz.items()}
-
         ''' Angular jog '''
         # Only need to obtain angular_xyz when moving
         euler_data = self.imu_controller.get_latest_euler()
@@ -768,10 +920,7 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         self.angular_xyz = xyz if xyz is not None else self.angular_xyz
         self.z_39 = z_39 if z_39 is not None else self.z_39
         scaled_xyz = self.angular_xyz.copy()
-        scaled_xyz['x'] = self.angular_xyz['y']
-        scaled_xyz['y'] = -self.angular_xyz['x']
         scaled_xyz['z'] = scaled_xyz['z'] if abs(scaled_xyz['z']) > abs(self.z_39) else self.z_39
-        scaled_xyz = {k: v * self.angular_scale for k, v in scaled_xyz.items()}
         # print("DEBUG|| scaled_xyz," + str(scaled_xyz))
 
         # for k, v in linear_scaled_xyz.items():
@@ -781,7 +930,7 @@ class PS5DualSenseIMUController(PS5DualSenseController):
         #     if np.random.uniform() > 0.9:
         #         scaled_xyz[k] = v + float(np.random.randn(1)) * np.random.uniform(0.01, 0.04)
 
-        self.robot.lin_ang_jog_pub(linear_message=linear_scaled_xyz, angular_message=scaled_xyz)
+        self._publish_imu_angular_jog(self.linear_xyz, scaled_xyz)
 
     def on_angular_button_released(self):
         self.imu_controller.reset_pose()

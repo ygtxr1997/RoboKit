@@ -42,12 +42,22 @@ class TCLDataset(Dataset):
             # self.load_npy_by_key("robot_obs")
             # self.load_npy_by_key("force_torque")
 
+        self._auto_load_keys = load_keys is None
         if load_keys is None:
             load_keys = ["primary_rgb", "gripper_rgb", "primary_depth", "gripper_depth",
                          "language_text", "actions", "rel_actions", "robot_obs", "force_torque"]
-        self.load_keys = load_keys
+            if "gripper_max_effort" in self._available_keys():
+                load_keys.append("gripper_max_effort")
+        self.load_keys = list(load_keys)
 
         print("[TCLDataset] total length:", self.total_length)
+
+    def _available_keys(self):
+        """Inspect the first frame's fields without decoding its payload."""
+        if not self.ep_fns:
+            return set()
+        with np.load(os.path.join(self.root, self.ep_fns[0])) as frame:
+            return set(frame.files)
 
     def get_tasks(self, root):
         self.root = root
@@ -73,6 +83,19 @@ class TCLDataset(Dataset):
         return npz_data
 
     def load_single_frame(self, npz_path: str):
+        """Read one frame, rejecting missing or mixed effort labels."""
+        effort_key = "gripper_max_effort"
+        if self._auto_load_keys or effort_key in self.load_keys:
+            with np.load(npz_path) as frame:
+                has_effort = effort_key in frame.files
+            expects_effort = effort_key in self.load_keys
+            if self._auto_load_keys and has_effort != expects_effort:
+                raise ValueError(
+                    f"Mixed gripper_max_effort schemas at {npz_path}; "
+                    "process old and new recordings separately"
+                )
+            if expects_effort and not has_effort:
+                raise ValueError(f"Missing field '{effort_key}' in {npz_path}")
         data_handler = DataHandler.load(file_path=npz_path, load_keys=self.load_keys,
                                         decode_image=self.needs_decode_image)
         data = {
@@ -370,8 +393,9 @@ class TCLDatasetHDF5(TCLDataset):
         :param h5_path: 输出的 HDF5 文件路径
         :param keys_config: 键配置，指定每个字段的类型（如 'rgb', 'depth', 'string' 等）
         """
-        super().__init__(root, use_extracted, load_keys, is_img_decoded_in_h5)
         self.h5_path = h5_path
+        self.use_h5 = use_h5
+        super().__init__(root, use_extracted, load_keys, is_img_decoded_in_h5)
         self.is_img_decoded_in_h5 = is_img_decoded_in_h5
 
         keys_config = keys_config or {
@@ -384,15 +408,23 @@ class TCLDatasetHDF5(TCLDataset):
             "rel_actions": "float",
             "robot_obs": "float",
             "force_torque": "float",
+            "gripper_max_effort": "float",
         }
-        self.keys_config = keys_config  # 例如 {"primary_rgb": "rgb", "language_text": "string", ...}
+        self.keys_config = dict(keys_config)
+        self.keys_config.setdefault("gripper_max_effort", "float")
 
         # 如果 h5_path 存在，提前加载 HDF5 文件
-        self.use_h5 = use_h5
         self.dsets = {}
         if os.path.exists(self.h5_path) and use_h5:
             self._load_hdf5_file()
             print("[TCLDatasetHDF5] using h5 data_manager:", self.h5_path, ". total_len:", self.total_length)
+
+    def _available_keys(self):
+        """Use HDF5 fields when reading HDF5, rather than the source NPZ schema."""
+        if self.use_h5 and os.path.exists(self.h5_path):
+            with h5py.File(self.h5_path, 'r') as hf:
+                return set(hf.keys())
+        return super()._available_keys()
 
     @staticmethod
     def _extract_image_bytes(raw):
@@ -548,7 +580,10 @@ class TCLDatasetHDF5(TCLDataset):
     def _load_hdf5_file(self):
         """加载 HDF5 文件并将每个字段的 dataset 存储到 dsets 字典中"""
         self.hf = h5py.File(self.h5_path, 'r')  # 这里打开文件并保留文件句柄
-        for key in self.keys_config:
+        for key in self.load_keys:
+            if key not in self.hf:
+                self.hf.close()
+                raise ValueError(f"Missing field '{key}' in {self.h5_path}")
             self.dsets[key] = self.hf[key]
             self.total_length = max(len(self.dsets[key]), self.total_length)  # modify total length
 

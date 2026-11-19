@@ -181,3 +181,5 @@ thirdparty/tmp*
 # Idea
 .idea/*
 RoboKit/.idea/
+debug_qqy/
+auto_collection_qqy/

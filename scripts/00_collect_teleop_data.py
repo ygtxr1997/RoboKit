@@ -145,13 +145,31 @@ env_light_params = {
 # saving_root = "/home/geyuan/local_soft/TCL/0417_plastic_egg/"
 # task_instruction = "Pick the plastic egg and place it into the egg box."
 
-''' Debug '''
-# saving_root = "/home/geyuan/local_soft/TCL/tmp/"
-# task_instruction = "Warning! this is a debug task!"
-
 ''' lh_tower '''
-saving_root = "/home/geyuan/local_soft/TCL/1014_lh_tower_three_blocks/"
-task_instruction = "Stack the wooden blocks onto the peg in the order: purple, red, yellow."
+# saving_root = "/home/geyuan/local_soft/TCL/1014_lh_tower_three_blocks/"
+# task_instruction = "Stack the wooden blocks onto the peg in the order: purple, red, yellow."
+
+''' battery '''
+# saving_root = "/home/geyuan/local_soft/TCL/1014_insert_two_batteries/"
+# saving_root = "/home/geyuan/local_soft/TCL/1014_insert_two_batteries_marked/"
+# task_instruction = "Insert the red battery into the battery box first, then insert the blue battery into the same box."
+
+''' lh_air_fryer '''
+# saving_root = "/home/geyuan/local_soft/TCL/1014_lh_air_fryer/"
+# task_instruction = "Grab and pick the bell pepper from the plate, place it into the air fryer basket, and then push the basket back in."
+
+''' Debug '''
+saving_root = "/home/geyuan/local_soft/TCL/tmp/"
+task_instruction = "Warning! this is a debug task!"
+
+''' lh_chemistry'''
+# saving_root = "/home/geyuan/local_soft/TCL/1029_lh_chemistry_leave/"
+# task_instruction = (
+#     "Perform an acid-base neutralization task: First, press down to toggle the power switch on and pick up the dropper."
+#     "Next, enter a titration loop—squeeze and slightly release the gripper to draw alkaline solution from the reservoir, "
+#     "lift the dropper over the reaction beaker, squeeze to dispense the liquid, and return the dropper to the storage beaker—repeating"
+#     "this cycle until the solution in the reaction beaker turns red. Once neutralized, release the dropper, return to the home"
+#     "configuration, close the gripper, and press down to turn off the power switch.")
 
 ''' disk force 3 '''
 # saving_root = "/home/geyuan/local_soft/TCL/0731_disk_force_9/"
@@ -162,7 +180,8 @@ env_params = env_source_params
 rc = RobotClient(client)
 controller = PS5DualSenseIMUController(
     robot=rc,
-    limited_gripper_open_ratio=0.18,  # mode 2 opening ratio; left D-pad toggles mode
+    limited_gripper_open_ratio=0.25,  # default: 0.18; mode 2 opening ratio; left D-pad toggles mode
+    limited_gripper_max_effort=0,  # mode 2 effort limit for both opening and closing
     saving_root=saving_root,
     task_instruction=task_instruction,
     saving_workers=6,

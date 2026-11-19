@@ -39,22 +39,30 @@ def concatenate_rgb_images(img1, img2, vertical=False, resize_ratio=1.):
         return np.vstack((img1, img2))
 
 
-def plot_action_wrt_time(action_data: np.ndarray, only_last_frame: bool = False):
+def plot_action_wrt_time(action_data: np.ndarray, only_last_frame: bool = False,
+                         gripper_max_effort_T: np.ndarray = None):
     """
     Plot action with respect to time
 
     :param action_data: (T, 7) array with format (x, y, z, a, b, c, g)
-    :return: (frames, fig, (ax1, ax2))
+    :param gripper_max_effort_T: Optional (T,) array of commanded effort limits.
+    :return: (frames, fig, axes)
         frames: A list of RGB images for animation
         fig: matplotlib figure object
-        (ax1, ax2): tuple of axes objects
+        axes: tuple of two axes, or three when effort is provided
     """
     frames_cnt = action_data.shape[0]
     action_dim = action_data.shape[1]
     assert action_dim >= 3, "Action data_manager must have at least 3 dimensions"
 
-    # 创建一个图和两个子图（2行1列）
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+    has_effort = gripper_max_effort_T is not None
+    if has_effort:
+        assert gripper_max_effort_T.shape == (frames_cnt,), "Effort must have shape (T,) matching action frames"
+    # Effort has its own scale so it does not compress the action curves.
+    subplot_count = 3 if has_effort else 2
+    fig, axes = plt.subplots(subplot_count, 1, figsize=(10, 4 * subplot_count))
+    axes = tuple(axes)
+    ax1, ax2 = axes[:2]
 
     # --- 子图1：x, y, z ---
     labels_xyz = ['x', 'y', 'z']
@@ -98,6 +106,24 @@ def plot_action_wrt_time(action_data: np.ndarray, only_last_frame: bool = False)
     ax2.legend(loc='upper right')
     ax2.grid(True, alpha=0.3)
 
+    if has_effort:
+        ax3 = axes[2]
+        effort_line, = ax3.step([], [], where='post', color='teal', linewidth=2)
+        effort_min = float(np.min(gripper_max_effort_T))
+        effort_max = float(np.max(gripper_max_effort_T))
+        effort_margin = max(0.1 * (effort_max - effort_min), 0.1)
+        ax3.set_xlim(0, frames_cnt)
+        ax3.set_ylim(effort_min - effort_margin, effort_max + effort_margin)
+        ax3.set_xlabel('Time (Frames)')
+        ax3.set_ylabel('Max Effort')
+        ax3.set_title('Gripper Max Effort')
+        ax3.grid(True, alpha=0.3)
+        effort_text = ax3.text(
+            0.02, 0.95, '', transform=ax3.transAxes, fontsize=9,
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+        )
+
     # 帧图列表
     frames = []
 
@@ -113,6 +139,10 @@ def plot_action_wrt_time(action_data: np.ndarray, only_last_frame: bool = False)
         # 更新 abcg 曲线
         for i, line in enumerate(lines_abcg):
             line.set_data(np.arange(frame_num + 1), action_data[:frame_num + 1, i + 3])
+
+        if has_effort:
+            effort_line.set_data(np.arange(frame_num + 1), gripper_max_effort_T[:frame_num + 1])
+            effort_text.set_text(f'Current: max_effort={gripper_max_effort_T[frame_num]:g}')
 
         # 显示当前值
         if frame_num > 0:
@@ -143,7 +173,7 @@ def plot_action_wrt_time(action_data: np.ndarray, only_last_frame: bool = False)
         frames.append(img)
 
     plt.close(fig)
-    return frames, fig, (ax1, ax2)
+    return frames, fig, axes
 
 
 def save_frames_as_video(

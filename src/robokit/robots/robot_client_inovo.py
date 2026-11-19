@@ -44,6 +44,7 @@ class RobotClient:
             'state': GripperState.INIT,  # managed by ourselves
             'message': 0.,  # target closure ratio: 0 open, 1 closed
             'command_position': None,  # last published opening target
+            'command_max_effort': None,  # last published effort limit
         }
 
         # SUBSCRIBING to DEBUG info
@@ -336,44 +337,57 @@ class RobotClient:
         }}))
 
     #### GRIPPER CONTROL ####
-    def _send_gripper_position(self, position: float):
-        """Publish a normalized gripper opening position: 0 closed, 1 open."""
+    def _send_gripper_position(self, position: float, max_effort: float = 85.0):
+        """Publish opening position (0 closed, 1 open) and effort limit."""
         position = max(min(float(position), 1.0), 0.0)
+        max_effort = float(max_effort)
         self.gripper_publisher.publish(roslibpy.Message({
             "goal": {
                 "command": {
                     "position": position,
-                    "max_effort": 85.0,
+                    "max_effort": max_effort,
                 }
             }
         }))
         self.gripper['command_position'] = position
+        self.gripper['command_max_effort'] = max_effort
         self.gripper['message'] = 1.0 - position
 
-    def _send_gripper_action(self, action: int):
+    def _send_gripper_action(self, action: int, max_effort: float = 85.0):
         # Keep the existing action semantics: 0:GRIP, 1:RELEASE.
         if action == 0:
-            self._send_gripper_position(0.0)
+            self._send_gripper_position(0.0, max_effort=max_effort)
         elif action == 1:
-            self._send_gripper_position(1.0)
+            self._send_gripper_position(1.0, max_effort=max_effort)
         else:
             raise ValueError(f"Unsupported gripper action: {action}")
 
-    def gripper_set_position(self, position: float):
-        """Set a normalized opening target, publishing only when it changes."""
+    def gripper_set_position(self, position: float, max_effort: float = 85.0):
+        """Set opening target and effort limit, publishing only on changes."""
         position = max(min(float(position), 1.0), 0.0)
+        max_effort = float(max_effort)
         last_position = self.gripper['command_position']
-        if last_position is None or abs(position - last_position) > 1e-8:
-            self._send_gripper_position(position)
+        last_effort = self.gripper['command_max_effort']
+        # Effort changes must reach the driver even if the target stays closed.
+        if (last_position is None or abs(position - last_position) > 1e-8
+                or last_effort is None or abs(max_effort - last_effort) > 1e-8):
+            self._send_gripper_position(position, max_effort=max_effort)
         # A subsequent binary command must not trust the old open/closed state.
         self.gripper['state'] = GripperState.INIT
 
     def gripper_set_pub(self,
-                        message: float, continuous: bool = False):
-        """Set closure ratio (0 open, 1 closed), binary unless continuous is enabled."""
+                        message: float, continuous: bool = False,
+                        max_effort: float = 85.0):
+        """Set closure ratio (0 open, 1 closed) and effort, binary by default."""
         if continuous:
-            self.gripper_set_position(1.0 - float(message))
+            self.gripper_set_position(1.0 - float(message), max_effort=max_effort)
             return
+
+        max_effort = float(max_effort)
+        last_effort = self.gripper['command_max_effort']
+        # Reissue a binary goal when only its effort limit changes.
+        if last_effort is None or abs(max_effort - last_effort) > 1e-8:
+            self.gripper['state'] = GripperState.INIT
 
         DIST_EPS = 0.01
         POS_MAX = 0.99
@@ -406,7 +420,7 @@ class RobotClient:
                     GripperState.MOVING_TO_CLOSE,  # interrupted
                     GripperState.REACHED_CLOSE,
                 ]
-                self._send_gripper_action(action=1)
+                self._send_gripper_action(action=1, max_effort=max_effort)
                 self.gripper['state'] = GripperState.MOVING_TO_OPEN
         else:  # Close
             if self.gripper['state'] in [
@@ -425,7 +439,7 @@ class RobotClient:
                     GripperState.MOVING_TO_OPEN,  # interrupted
                     GripperState.REACHED_OPEN,
                 ]
-                self._send_gripper_action(action=0)
+                self._send_gripper_action(action=0, max_effort=max_effort)
                 self.gripper['state'] = GripperState.MOVING_TO_CLOSE
         return
 
@@ -537,10 +551,13 @@ class RobotClient:
         pp.pprint(d)
 
     def get_current_frame_info(self, verbose=False):
+        """Return robot state and the last published gripper targets."""
         data_dict = {
             "tcp_xyz_wrt_base": self.get_tcp_coordinates(),
             "tcp_ori_wrt_base": self.get_tcp_orientation(out_type='euler_radius'),
             "gripper_moving_to": self.get_gripper_message(),
+            # Commanded limit, not measured contact force or driver feedback.
+            "gripper_max_effort": self.gripper['command_max_effort'],
             "jog_linear": self.message_linear_jog,
             "jog_angular": self.message_angular_jog,
             "gripper_width": self.gripper['position'],

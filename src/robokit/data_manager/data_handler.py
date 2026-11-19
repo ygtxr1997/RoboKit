@@ -31,6 +31,7 @@ class DataHandler:
             "robot_obs": np.random.randn(14),
             # tcp pos (3), tcp ori (3), gripper width (1), joint_states (6) in rad, gripper_action (1)
             "force_torque": np.random.randn(6),  # (fx,fy,fz,mx,my,mz)
+            "gripper_max_effort": np.array([85.0], dtype=np.float32),  # optional last commanded limit
         }
         """
         self.data_dict = data_dict
@@ -115,6 +116,7 @@ class DataHandler:
             "rel_actions": np.ndarray,
             "robot_obs": np.ndarray,
             "force_torque": np.ndarray,
+            "gripper_max_effort": np.ndarray,
         }
         if 'language_text' in data_dict.keys() and isinstance(data_dict['language_text'], str):
             data_dict['language_text'] = np.array(data_dict['language_text'])
@@ -140,6 +142,9 @@ class DataHandler:
                     pass  # Language task description
                 elif data_dict[key].shape == (6,) and key in ["force_torque"]:
                     pass  # force and torque
+                elif (key == "gripper_max_effort" and data_dict[key].shape == (1,)
+                      and data_dict[key].dtype == np.float32):
+                    pass  # Optional command label, independent of the 7-D action.
                 else:
                     print(f"项 {key} 的形状不匹配！")
                     return False

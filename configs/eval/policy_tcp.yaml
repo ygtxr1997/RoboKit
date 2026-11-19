@@ -1,0 +1,27 @@
+camera:
+  resize_hw: [256, 320]
+
+#  | state_fields 字段 | 维度 | 内容 |
+#  |---|---:|---|
+#  | tcp_xyz | 3 | TCP 相对机器人基座的 [x, y, z]，单位 m |
+#  | tcp_abc | 3 | TCP 姿态，xyz 顺序的欧拉角，单位 rad |
+#  | tcp_pose | 6 | tcp_xyz + tcp_abc |
+#  | gripper_width | 1 | 夹爪反馈的位置比例，范围 [0, 1]，不是以米表示的宽度 |
+#  | joint_positions | 6 | 六个关节的位置，单位 rad |
+#  | gripper_moving_to | 1 | 最近发送的夹爪目标值，代码中为 1 - command_position |
+#  | force | 6 | 力传感器的 [fx, fy, fz, mx, my, mz]，包含三个力和三个力矩 |
+#  | {name: zeros, dim: N} | N | 填充 N 个零 |
+policy:
+  cache_length: 1
+  state_fields:
+    - tcp_pose
+  expected_state_dim: 6
+
+control:
+  gripper_sticky: 0
+  continuous_gripper: false
+  force_fz_limit: -7.5
+
+recording:
+  image_save_fn: tmp_saved_video.mp4
+
