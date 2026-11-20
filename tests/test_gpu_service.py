@@ -93,12 +93,18 @@ def model_step(step_request: StepRequestFromEvaluator):
         "image": primary_img,  # should be (B,T,C,H,W)
     }
 
+    def to_numpy(value):
+        return value.detach().cpu().numpy() if torch.is_tensor(value) else np.asarray(value)
+
     # 3. Model inference
     with torch.no_grad():
-        action = gpu_service_api.predict_action(obs_dict)['action_pred']
-    print("[gpu_service] action:", action.shape, action[0].min(dim=0)[0], action[0].max(dim=0)[0])
-    action = action.cpu().numpy()  # (B,T,D)
-
+        prediction = gpu_service_api.predict_action(obs_dict)
+        if isinstance(prediction, dict):
+            action = prediction['action_pred']
+        else:
+            action = prediction
+    action = to_numpy(action)  # (B,T,D)
+    print("[gpu_service] action:", action.shape, action[0].min(axis=0), action[0].max(axis=0))
     # 4. Send action request
     request_to_evaluator = StepRequestFromPolicy.encode_from_raw(action=action)
     return request_to_evaluator.model_dump(mode="json")

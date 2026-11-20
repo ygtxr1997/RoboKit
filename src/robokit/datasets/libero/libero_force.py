@@ -1,10 +1,10 @@
 import os
 import yaml
 import h5py
-import math
 import numpy as np
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Tuple
+import bisect
 
 from robokit.debug_utils.printer import beautiful_print
 
@@ -83,26 +83,26 @@ class LiberoH5FrameDataset:
     """
     Minimal per-frame dataset.
 
-    - Build a global frame index: global_i -> (demo_key, t)
-    - __getitem__(i) returns ALL content for that frame as nested dict:
-        {
-          "demo_key": str,
-          "t": int,
-          "actions": (7,),
-          "dones": scalar,
-          "rewards": scalar,
-          "robot_states": (...,) (if exists)
-          "states": (...,) (if exists)
-          "obs": { all obs datasets at time t }
-          "meta": { optional env_args/global attrs if you want }
-        }
-
     Assumes HDF5 structure: /data/demo_x/...
     """
 
-    def __init__(self, h5_path: str, load_to_memory: bool = False):
+    def __init__(
+        self,
+        h5_path: str,
+        load_to_memory: bool = False,
+        rdcc_nbytes: int = 128 * 1024 * 1024,
+        rdcc_nslots: int = 1_000_003,
+        rdcc_w0: float = 0.75,
+        demo_keys: Optional[List[str]] = None,
+    ):
         self.h5_path = h5_path
+        self.selected_demo_keys = demo_keys
         self.load_to_memory = load_to_memory
+
+        # HDF5 raw data chunk cache params (speed-up for repeated chunk reads)
+        self.rdcc_nbytes = int(rdcc_nbytes)
+        self.rdcc_nslots = int(rdcc_nslots)
+        self.rdcc_w0 = float(rdcc_w0)
 
         self._h5 = None  # lazy open (safe for multiprocessing)
         self.text_instruction = ""
@@ -123,7 +123,13 @@ class LiberoH5FrameDataset:
 
     def _get_h5(self) -> h5py.File:
         if self._h5 is None:
-            self._h5 = h5py.File(self.h5_path, "r")
+            self._h5 = h5py.File(
+                self.h5_path,
+                "r",
+                rdcc_nbytes=self.rdcc_nbytes,
+                rdcc_nslots=self.rdcc_nslots,
+                rdcc_w0=self.rdcc_w0,
+            )
         return self._h5
 
     def __getstate__(self):
@@ -145,17 +151,22 @@ class LiberoH5FrameDataset:
             self.text_instruction = os.path.basename(bddl_file_name).split(".")[0].replace("_", " ")
             self.demo_keys = sorted(list(f["data"].keys()), key=lambda x: int(x.split("_")[1]))
 
+            if self.selected_demo_keys is not None:
+                missing = set(self.selected_demo_keys) - set(self.demo_keys)
+                if missing:
+                    raise ValueError(f"Unknown demo keys in {self.h5_path}: {sorted(missing)}")
+                # Filtering here also limits MergeDataset's statistics to this split.
+                selected = set(self.selected_demo_keys)
+                self.demo_keys = [key for key in self.demo_keys if key in selected]
+
             self.demo_lengths = []
             for dk in self.demo_keys:
                 g = f["data"][dk]
-                # prefer obs length
                 if "obs" in g:
-                    # pick the first obs dataset
                     obs_keys = list(g["obs"].keys())
                     assert len(obs_keys) > 0, f"{dk} has empty obs"
                     T = int(g["obs"][obs_keys[0]].shape[0])
                 else:
-                    # fallback to actions
                     T = int(g["actions"].shape[0])
                 self.demo_lengths.append(T)
 
@@ -167,7 +178,6 @@ class LiberoH5FrameDataset:
     def _preload_all(self):
         """
         Preload everything into RAM. Warning: can be huge due to images.
-        A safer approach is to keep load_to_memory=False.
         """
         f = self._get_h5()
         self._cache["data"] = {}
@@ -190,7 +200,6 @@ class LiberoH5FrameDataset:
         if i < 0 or i >= self.total_len:
             raise IndexError(i)
 
-        # binary search over prefix
         lo, hi = 0, len(self.prefix) - 1
         while lo <= hi:
             mid = (lo + hi) // 2
@@ -204,9 +213,40 @@ class LiberoH5FrameDataset:
                 dk = self.demo_keys[mid]
                 return dk, int(i - start)
 
-        # should never happen
         dk = self.demo_keys[-1]
         return dk, int(self.demo_lengths[-1] - 1)
+
+    def _locate_demo_idx_by_local(self, local_i: int) -> int:
+        local_i = int(local_i)
+        if local_i < 0 or local_i >= self.total_len:
+            raise IndexError(local_i)
+        idx = bisect.bisect_right(self.prefix, local_i) - 1
+        if idx < 0:
+            idx = 0
+        return idx
+
+    def get_demo_window_info(self, local_i: int) -> Tuple[str, int, int, int]:
+        """
+        Return (demo_key, demo_start, demo_end, t_in_demo), all in dataset-local indexing.
+        demo interval uses half-open [demo_start, demo_end).
+        """
+        demo_idx = self._locate_demo_idx_by_local(local_i)
+        demo_start = self.prefix[demo_idx]
+        demo_end = demo_start + self.demo_lengths[demo_idx]
+        demo_key = self.demo_keys[demo_idx]
+        t_in_demo = int(local_i - demo_start)
+        return demo_key, int(demo_start), int(demo_end), t_in_demo
+
+    def get_demo_data(self, demo_key: str):
+        """
+        Return demo container:
+          - h5py.Group if load_to_memory=False
+          - dict if load_to_memory=True
+        """
+        if self.load_to_memory:
+            return self._cache["data"][demo_key]
+        f = self._get_h5()
+        return f["data"][demo_key]
 
     def __getitem__(self, i: int) -> Dict[str, Any]:
         dk, t = self._locate(i)
@@ -227,19 +267,17 @@ class LiberoH5FrameDataset:
         g = f["data"][dk]
 
         out: Dict[str, Any] = {
-            "demo_key": dk, "t": t,
+            "demo_key": dk,
+            "t": t,
             "obs": {},
             "text_instruction": self.text_instruction,
         }
 
-        # datasets at demo level
         for k in ["actions", "dones", "rewards", "robot_states", "states", "replay_reset_every"]:
             if k in g and isinstance(g[k], h5py.Dataset):
                 ds = g[k]
-                # replay_reset_every is shape (1,) so return scalar/array
                 out[k] = ds[()] if ds.shape == () or ds.shape == (1,) else ds[t]
 
-        # obs group
         if "obs" in g:
             for ok in g["obs"].keys():
                 out["obs"][ok] = g["obs"][ok][t]
@@ -254,26 +292,6 @@ class LiberoH5FrameDataset:
 class MergeDataset:
     """
     Merge multiple LiberoH5FrameDataset into one global frame index.
-
-    Interval convention (UNIFIED):
-      - All index ranges are half-open intervals: [start, end)
-      - Python range(start, end) also represents [start, end)
-
-    __getitem__(i) windows (in LOCAL index li inside its dataset):
-      - history obs/state indices: [li - n_obs + 1, li + 1)          (length = n_obs)
-          => frames: li-n_obs+1, ..., li
-      - future  obs/state indices: [li + 1, li + 1 + chunk_size)     (length = chunk_size)
-          => frames: li+1, ..., li+chunk_size
-      - action  indices:          [li, li + chunk_size)              (length = chunk_size)
-          => frames: li, ..., li+chunk_size-1
-
-    Cross-demo behavior:
-      - drop_cross_demo=True:
-          If any requested index lies outside the current demo range, raise IndexError.
-      - drop_cross_demo=False (DEFAULT):
-          If requested index is outside the current demo range, use edge-repeat:
-            idx < demo_start -> demo_start
-            idx >= demo_end  -> demo_end-1
     """
 
     def __init__(
@@ -281,16 +299,13 @@ class MergeDataset:
         datasets: List[LiberoH5FrameDataset],
         n_obs: int,
         chunk_size: int,
-        # which keys are considered "obs/state" for windows
-        obs_keys: Optional[List[str]] = None,          # if None => use all obs keys from first sample
-        state_keys: Optional[List[str]] = None,        # e.g. ["states", "robot_states"]
+        obs_keys: Optional[List[str]] = None,
+        state_keys: Optional[List[str]] = None,
         action_key: str = "actions",
-        # padding behavior
         drop_cross_demo: bool = False,
         pad_value_numeric: float = 0.0,
         pad_value_image: int = 0,
         max_len: Optional[int] = None,
-        # others
         load_future_obs: bool = False,
     ):
         assert len(datasets) > 0
@@ -304,7 +319,6 @@ class MergeDataset:
         self.max_len = None if max_len is None else int(max_len)
         self.load_future_obs = load_future_obs
 
-        # build merged prefix
         self.lengths = [len(ds) for ds in datasets]
         self.prefix = [0] * len(self.lengths)
         for i in range(1, len(self.prefix)):
@@ -313,7 +327,6 @@ class MergeDataset:
         if self.max_len is not None:
             self.total_len = min(self.total_len, self.max_len)
 
-        # infer keys
         sample = self.datasets[0][0]
         if obs_keys is None:
             obs_keys = list(sample.get("obs", {}).keys())
@@ -325,19 +338,12 @@ class MergeDataset:
         self.obs_keys = obs_keys
         self.state_keys = state_keys
 
-        # record shapes/dtypes for padding
         self._spec = self._infer_padding_spec(sample)
-
-        # cache demo bounds per (dataset_id, demo_key): (demo_start, demo_end) as [start, end)
-        self._demo_bounds_cache: Dict[Tuple[int, str], Tuple[int, int]] = {}
 
     def __len__(self) -> int:
         return self.total_len
 
     def _infer_padding_spec(self, sample: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Build a spec for padding based on first sample.
-        """
         spec = {"obs": {}, "state": {}, "action": None}
         for ok in self.obs_keys:
             arr = sample["obs"][ok]
@@ -371,167 +377,87 @@ class MergeDataset:
     def _make_pad_like(self, shape, dtype):
         if np.issubdtype(dtype, np.uint8):
             return np.full(shape, self.pad_value_image, dtype=dtype)
-        else:
-            return np.full(shape, self.pad_value_numeric, dtype=dtype)
+        return np.full(shape, self.pad_value_numeric, dtype=dtype)
 
     def _fetch_frame(self, dataset_id: int, local_i: int) -> Dict[str, Any]:
         return self.datasets[dataset_id][local_i]
 
-    def _safe_fetch_same_demo(self, dataset_id: int, local_i: int, ref_demo_key: str) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def _take_rows_h5safe(arr, idx: np.ndarray):
         """
-        Safe fetch for the same dataset and same demo.
-
-        Returns:
-          - frame dict if (0 <= local_i < len(ds)) AND demo_key matches
-          - None otherwise
+        h5py advanced indexing requires strictly increasing indices.
+        This helper supports duplicated / non-strict indices by
+        reading unique sorted indices once and gathering back.
         """
-        if local_i < 0 or local_i >= self.lengths[dataset_id]:
-            return None
-        fr = self._fetch_frame(dataset_id, local_i)
-        if fr["demo_key"] != ref_demo_key:
-            return None
-        return fr
-
-    def _get_demo_bounds(self, dataset_id: int, ref_local_i: int, demo_key: str) -> Tuple[int, int]:
-        """
-        Get local demo bounds as a half-open interval [demo_start, demo_end).
-
-        Meaning:
-          - demo_start is the first local index in this dataset whose demo_key == demo_key
-          - demo_end is the first local index AFTER the demo (exclusive)
-          - valid local indices within the demo are: demo_start, ..., demo_end-1
-
-        Cached per (dataset_id, demo_key).
-        """
-        cache_key = (int(dataset_id), str(demo_key))
-        if cache_key in self._demo_bounds_cache:
-            return self._demo_bounds_cache[cache_key]
-
-        L = self.lengths[dataset_id]
-        # Scan left to find demo_start
-        demo_start = ref_local_i
-        while demo_start - 1 >= 0:
-            fr = self._fetch_frame(dataset_id, demo_start - 1)
-            if fr["demo_key"] != demo_key:
-                break
-            demo_start -= 1
-
-        # Scan right to find demo_end (exclusive)
-        demo_end = ref_local_i + 1
-        while demo_end < L:
-            fr = self._fetch_frame(dataset_id, demo_end)
-            if fr["demo_key"] != demo_key:
-                break
-            demo_end += 1
-
-        self._demo_bounds_cache[cache_key] = (demo_start, demo_end)
-        return demo_start, demo_end
-
-    def _edge_repeat_fetch(self, dataset_id: int, idx: int, ref_local_i: int, demo_key: str) -> Dict[str, Any]:
-        """
-        Fetch frame using edge-repeat within the current demo bounds [demo_start, demo_end).
-
-        - If idx < demo_start: clamp to demo_start
-        - If idx >= demo_end:  clamp to demo_end-1
-        """
-        demo_start, demo_end = self._get_demo_bounds(dataset_id, ref_local_i, demo_key)
-        # clamp into [demo_start, demo_end-1]
-        if idx < demo_start:
-            idx = demo_start
-        elif idx >= demo_end:
-            idx = demo_end - 1
-
-        fr = self._fetch_frame(dataset_id, idx)
-        # Sanity check: should always match
-        if fr["demo_key"] != demo_key:
-            # Fallback (shouldn't happen if bounds are correct)
-            fr = self._fetch_frame(dataset_id, demo_start)
-        return fr
+        idx = np.asarray(idx, dtype=np.int64)
+        if idx.ndim != 1:
+            raise ValueError(f"idx must be 1D, got shape={idx.shape}")
+        if idx.size == 0:
+            return arr[idx]
+        uniq, inv = np.unique(idx, return_inverse=True)  # uniq sorted asc
+        gathered = arr[uniq]
+        return gathered[inv]
 
     def __getitem__(self, i: int) -> Dict[str, Any]:
         ds_id, li = self._locate_dataset(i)
-        cur = self._fetch_frame(ds_id, li)
-        demo_key = cur["demo_key"]
+        ds = self.datasets[ds_id]
 
-        # Build index ranges as HALF-OPEN intervals [start, end)
-        # history: [li - n_obs + 1, li + 1)
-        hist_start = li - self.n_obs + 1
-        hist_end   = li + 1
+        # Fast demo lookup without per-frame HDF5 probing.
+        demo_key, demo_start, demo_end, t_in_demo = ds.get_demo_window_info(li)
 
-        # future:  [li + 1, li + 1 + chunk_size)
-        fut_start  = li + 1
-        fut_end    = li + 1 + self.chunk_size
-
-        # action:  [li, li + chunk_size)
-        act_start  = li
-        act_end    = li + self.chunk_size
-
-        hist_indices = list(range(hist_start, hist_end))  # length n_obs
-        fut_indices  = list(range(fut_start,  fut_end))   # length chunk_size
-        act_indices  = list(range(act_start,  act_end))   # length chunk_size
-
-        # demo bounds in the same half-open convention [demo_start, demo_end)
-        demo_start, demo_end = self._get_demo_bounds(ds_id, li, demo_key)
+        hist_idx = np.arange(li - self.n_obs + 1, li + 1, dtype=np.int64)  # length n_obs
+        fut_idx = np.arange(li + 1, li + 1 + self.chunk_size, dtype=np.int64)  # length chunk_size
+        act_idx = np.arange(li, li + self.chunk_size, dtype=np.int64)  # length chunk_size
 
         if self.drop_cross_demo:
-            # strict: any idx outside [demo_start, demo_end) is illegal
-            for idx in hist_indices + fut_indices + act_indices:
-                if not (demo_start <= idx < demo_end):
-                    raise IndexError(
-                        f"Window crosses demo boundary at global i={i}, local idx={idx}, "
-                        f"demo_range=[{demo_start},{demo_end})"
-                    )
-
-            def get_frame(idx: int) -> Dict[str, Any]:
-                # safe because checked above
-                return self._fetch_frame(ds_id, idx)
+            merged = np.concatenate([hist_idx, fut_idx, act_idx], axis=0)
+            if np.any(merged < demo_start) or np.any(merged >= demo_end):
+                bad = merged[(merged < demo_start) | (merged >= demo_end)][0]
+                raise IndexError(
+                    f"Window crosses demo boundary at global i={i}, local idx={int(bad)}, "
+                    f"demo_range=[{demo_start},{demo_end})"
+                )
         else:
-            # default: edge-repeat within demo
-            def get_frame(idx: int) -> Dict[str, Any]:
-                return self._edge_repeat_fetch(ds_id, idx, li, demo_key)
+            hist_idx = np.clip(hist_idx, demo_start, demo_end - 1)
+            fut_idx = np.clip(fut_idx, demo_start, demo_end - 1)
+            act_idx = np.clip(act_idx, demo_start, demo_end - 1)
 
-        # assemble history
-        hist_obs = {k: [] for k in self.obs_keys}
-        hist_state = {k: [] for k in self.state_keys}
-        for idx in hist_indices:
-            fr = get_frame(idx)
-            for ok in self.obs_keys:
-                hist_obs[ok].append(fr["obs"][ok])
-            for sk in self.state_keys:
-                hist_state[sk].append(fr[sk])
+        # Convert dataset-local idx -> demo-local t for one-shot fancy indexing.
+        hist_t = hist_idx - demo_start
+        fut_t = fut_idx - demo_start
+        act_t = act_idx - demo_start
 
-        # assemble future
+        g = ds.get_demo_data(demo_key)
+        is_mem = ds.load_to_memory
+
+        hist_obs = {}
+        for ok in self.obs_keys:
+            hist_obs[ok] = self._take_rows_h5safe(g["obs"][ok], hist_t)
+
+        hist_state = {}
+        for sk in self.state_keys:
+            hist_state[sk] = self._take_rows_h5safe(g[sk], hist_t)
+
         if self.load_future_obs:
-            fut_obs = {k: [] for k in self.obs_keys}
-            fut_state = {k: [] for k in self.state_keys}
-            for idx in fut_indices:
-                fr = get_frame(idx)
-                for ok in self.obs_keys:
-                    fut_obs[ok].append(fr["obs"][ok])
-                for sk in self.state_keys:
-                    fut_state[sk].append(fr[sk])
+            fut_obs = {}
+            for ok in self.obs_keys:
+                fut_obs[ok] = self._take_rows_h5safe(g["obs"][ok], fut_t)
 
-        # assemble actions
-        action_list = []
-        for idx in act_indices:
-            fr = get_frame(idx)
-            action_list.append(fr[self.action_key])
+            fut_state = {}
+            for sk in self.state_keys:
+                fut_state[sk] = self._take_rows_h5safe(g[sk], fut_t)
 
-        # stack
+        action_arr = self._take_rows_h5safe(g[self.action_key], act_t)
+
         ret_sample = {
             "demo_key": demo_key,
-            "t": int(cur["t"]),
-            "text_instruction": cur["text_instruction"],
+            "t": int(t_in_demo),
+            "text_instruction": ds.text_instruction,
+            "history": {"obs": hist_obs, "state": hist_state},
+            "action": action_arr,
         }
-        hist_obs = {k: np.stack(v, axis=0) for k, v in hist_obs.items()}
-        hist_state = {k: np.stack(v, axis=0) for k, v in hist_state.items()}
-        ret_sample["history"] = {"obs": hist_obs, "state": hist_state}
         if self.load_future_obs:
-            fut_obs = {k: np.stack(v, axis=0) for k, v in fut_obs.items()}
-            fut_state = {k: np.stack(v, axis=0) for k, v in fut_state.items()}
             ret_sample["future"] = {"obs": fut_obs, "state": fut_state}
-        action_arr = np.stack(action_list, axis=0)
-        ret_sample["action"] = action_arr
 
         return ret_sample
 
@@ -545,32 +471,20 @@ class MergeDataset:
     ) -> Dict[str, np.ndarray]:
         """
         Collect per-frame "current" arrays (no windows, no images) into big numpy arrays.
-
-        Returns:
-          {
-            "obs.wrenches": (N, dim),
-            "state.states": (N, dim),
-            "action.actions": (N, dim),
-            ...
-          }
         """
         collected: Dict[str, List[np.ndarray]] = {}
 
-        # init lists
         for k in keys["obs"]:
             collected[f"obs.{k}"] = []
         for k in keys["state"]:
             collected[f"state.{k}"] = []
-        # action: keep one key
         collected[f"action.{self.action_key}"] = []
 
-        # iterate each underlying dataset, read demo-by-demo in contiguous slices
         for ds in self.datasets:
             f = ds._get_h5()
             for dk in ds.demo_keys:
                 g = f["data"][dk]
 
-                # length T
                 if "obs" in g:
                     obs_keys = list(g["obs"].keys())
                     if len(obs_keys) > 0:
@@ -580,26 +494,22 @@ class MergeDataset:
                 else:
                     T = int(g["actions"].shape[0])
 
-                # ---- obs (numeric only; keys already filtered outside) ----
                 if "obs" in g:
                     for ok in keys["obs"]:
                         if ok not in g["obs"]:
                             continue
-                        arr = g["obs"][ok][...]              # (T, ...)
+                        arr = g["obs"][ok][...]
                         collected[f"obs.{ok}"].append(arr.reshape(T, -1))
 
-                # ---- state (demo-level datasets like "states"/"robot_states") ----
                 for sk in keys["state"]:
                     if sk in g and isinstance(g[sk], h5py.Dataset):
-                        arr = g[sk][...]                    # (T, ...)
+                        arr = g[sk][...]
                         collected[f"state.{sk}"].append(arr.reshape(T, -1))
 
-                # ---- action (demo-level) ----
                 if self.action_key in g and isinstance(g[self.action_key], h5py.Dataset):
-                    arr = g[self.action_key][...]           # (T, action_dim) or (T, ...)
+                    arr = g[self.action_key][...]
                     collected[f"action.{self.action_key}"].append(arr.reshape(T, -1))
 
-        # concat across all demos/datasets
         out: Dict[str, np.ndarray] = {}
         for name, parts in collected.items():
             if len(parts) == 0:
@@ -610,16 +520,15 @@ class MergeDataset:
     def compute_statistics(
         self,
         keys: Optional[Dict[str, List[str]]] = None,
-        quantile_max_samples: int = 300000,  # kept for API compatibility; used as optional downsample cap
+        quantile_max_samples: int = 300000,
         seed: int = 0,
-        verbose_every: int = 50000,          # unused in this basic all-array mode
+        verbose_every: int = 50000,
     ) -> Dict[str, Any]:
         """
         Basic implementation:
           1) Read ALL numeric arrays (no windows, no images) into memory
           2) Compute min/max/mean/std and p01/p99 (optionally subsample for quantile)
         """
-        # default keys: numeric obs (skip uint8) + all state_keys + action_key
         if keys is None:
             keys = {"obs": [], "state": [], "action": [self.action_key]}
             for ok in self.obs_keys:
@@ -629,15 +538,10 @@ class MergeDataset:
             keys["state"] = list(self.state_keys)
 
         rng = np.random.RandomState(seed)
-
-        # 1) collect big arrays
         arrays = self._collect_current_arrays(keys)
 
-        # 2) compute stats
         out: Dict[str, Any] = {}
-
         for name, X in arrays.items():
-            # X: (N, dim)
             X64 = X.astype(np.float64, copy=False)
             count = int(X64.shape[0])
 
@@ -646,7 +550,6 @@ class MergeDataset:
             minv = np.min(X64, axis=0)
             maxv = np.max(X64, axis=0)
 
-            # quantiles: basic approach = use all, but allow cap via random subset
             if count > quantile_max_samples:
                 idx = rng.choice(count, size=quantile_max_samples, replace=False)
                 Xq = X64[idx]
@@ -676,24 +579,19 @@ class MergeDataset:
             yaml.safe_dump(stats, f, sort_keys=True, allow_unicode=True)
 
 
-# =========================
-# Example usage
-# =========================
 if __name__ == "__main__":
-    # 1) single dataset
     ds1 = LiberoH5FrameDataset("dataset1.hdf5", load_to_memory=False)
     print("len(ds1) =", len(ds1))
     x = ds1[123]
     print(x["demo_key"], x["t"], list(x["obs"].keys()))
 
-    # 2) merged dataset with windows
     ds2 = LiberoH5FrameDataset("dataset2.hdf5", load_to_memory=False)
     merged = MergeDataset(
         datasets=[ds1, ds2],
         n_obs=4,
         chunk_size=8,
-        obs_keys=None,                 # auto: all obs keys
-        state_keys=["states"],         # e.g. ["states","robot_states"] if you want
+        obs_keys=None,
+        state_keys=["states"],
         action_key="actions",
         drop_cross_demo=False,
     )
@@ -701,9 +599,8 @@ if __name__ == "__main__":
     item = merged[1000]
     print(item["history"]["obs"].keys(), item["action"].shape)
 
-    # 3) compute stats and save yaml
     stats = merged.compute_statistics(
-        keys=None,                     # auto numeric obs + states + actions
+        keys=None,
         quantile_max_samples=200000,
         seed=0,
         verbose_every=20000,

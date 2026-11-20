@@ -75,6 +75,10 @@ class ServiceConnector:
         self.cache_actions_B_T_D = None
         self.stage_flag = 0  # 0:cold start, 1:hot start
         self.just_send = False  # just send frames or not ?
+        self.recording = None
+        self.recording_capability = None
+        self.last_request_id = -1
+        self.last_chunk_index = -1
 
         print(f"[ServiceConnector] session created: {base_url}")
 
@@ -83,6 +87,7 @@ class ServiceConnector:
         resp.raise_for_status()
         resp = resp.json()
 
+        self.recording_capability = resp.get("recording")
         max_cache_action = resp["max_cache_action"]
         if isinstance(max_cache_action, list):
             max_cache_action = max_cache_action[0]
@@ -154,11 +159,18 @@ class ServiceConnector:
                     max_cache_action=self.max_cache_actions,
                 )
 
+            self.last_request_id = self.send_cnt
+            if self.recording is not None:
+                self.recording.check()
+                request_to_policy.episode_id = self.recording.episode_id
+                request_to_policy.request_id = self.last_request_id
+                request_to_policy.frame_ids = kwargs['frame_ids']
+                request_to_policy.timestamps_ns = kwargs['timestamps_ns']
             sending_dict = request_to_policy.model_dump(mode="json")
             with time_stat("Post dict to GPU Inference"):
                 response = self.http_session.post(
                     f"{self.base_url}/step",
-                    json=sending_dict
+                    json=sending_dict, timeout=(5, 120)
                 )
                 response.raise_for_status()
 
@@ -170,7 +182,8 @@ class ServiceConnector:
         else:  # don't send anything, to save robots bandwidth
             self.just_send = False
 
-        ret_actions = self.cache_actions_B_T_D[:, self.send_cnt % self.max_cache_actions]
+        self.last_chunk_index = self.send_cnt % self.max_cache_actions
+        ret_actions = self.cache_actions_B_T_D[:, self.last_chunk_index]
         ret_actions = np.array(ret_actions)[:, None]  # [B,D] -> (B,1,D)
 
         self.send_cnt += 1

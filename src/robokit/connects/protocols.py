@@ -1,6 +1,7 @@
 import base64
 import io
 import os
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
@@ -13,6 +14,11 @@ from PIL import Image
 import cv2
 
 
+class StepRequestEvent(str, Enum):
+    STEP = "step"
+    ROLLOUT_END = "rollout_end"
+
+
 class StepRequestFromEvaluator(pydantic.BaseModel):
     """
     Sent from evaluator to policy. All data are unnormalized/raw.
@@ -22,19 +28,40 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
         tcp_state: (B,Ts,D) float32, optional
         stage_flag: 0:cold start, 1:hot start, can be used for online finetuning
         instruction: str
+        event: request event type
     """
+    episode_id: Optional[str] = None
+    request_id: Optional[int] = None
+    frame_ids: Optional[List[int]] = None  # B=1 recording window, chronological order
+    timestamps_ns: Optional[List[int]] = None
     instruction: str
     stage_flag: int  # 0:cold start, 1:hot start
 
     gt_video: List[List[str]]  # len1=B, len2=V*Ts (V:#camera_views, Ts>=v1), each str is base64 of (H,W,rgb)
+    event: StepRequestEvent = StepRequestEvent.STEP
     num_camera_views: int = 1  # V, default=1
     tcp_state: Optional[List[List[List[float]]]] = None # len1=B, len2=Ts, len3=D, float32
-    max_cache_action: int = None  # notified by the evaluator
+    max_cache_action: Optional[int] = None  # notified by the evaluator
+
+    @classmethod
+    def create_rollout_end(
+            cls,
+            instruction: str = "",
+            stage_flag: int = 0,
+            ) -> 'StepRequestFromEvaluator':
+        """Build a rollout-end event without observation frames."""
+        return cls(
+            instruction=instruction,
+            stage_flag=stage_flag,
+            gt_video=[],
+            event=StepRequestEvent.ROLLOUT_END,
+            max_cache_action=1,
+        )
 
     def decode_to_raw(self) -> Dict[str, Any]:
         def base64_to_image_H_W_C(img_base64: str) -> np.ndarray:
             img_byte = base64.b64decode(img_base64)
-            img_pil = Image.open(io.BytesIO(img_byte), formats=["JPEG"])
+            img_pil = Image.open(io.BytesIO(img_byte), formats=["JPEG", "PNG"])
             img_np = np.array(img_pil)  # (H,W,3) uint8
             return img_np
 
@@ -49,7 +76,11 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
             "gt_video": gt_video_B_T_H_W_C,
             "num_camera_views": self.num_camera_views,
             "tcp_state": tcp_state_B_T_D,
-            "max_cache_action": self.max_cache_action
+            "max_cache_action": self.max_cache_action,
+            "episode_id": self.episode_id,
+            "request_id": self.request_id,
+            "frame_ids": self.frame_ids,
+            "timestamps_ns": self.timestamps_ns,
         }
 
     def decode_to_raw_buffer(self, out_video_buffer: Optional[np.ndarray] = None) -> Dict[str, Any]:
@@ -70,7 +101,7 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
         else:
             # 兼容未传入 buffer 的情况：嗅探尺寸并临时分配
             first_img_byte = base64.b64decode(self.gt_video[0][0])
-            with Image.open(io.BytesIO(first_img_byte), formats=["JPEG"]) as img_pil:
+            with Image.open(io.BytesIO(first_img_byte), formats=["JPEG", "PNG"]) as img_pil:
                 first_img_np = np.array(img_pil)
 
             H, W, C = first_img_np.shape
@@ -85,7 +116,7 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
         #             if b == 0 and t == 0 and out_video_buffer is None:
         #                 continue
         #             img_byte = base64.b64decode(self.gt_video[b][t])
-        #             with Image.open(io.BytesIO(img_byte), formats=["JPEG"]) as img_pil:
+        #             with Image.open(io.BytesIO(img_byte), formats=["JPEG", "PNG"]) as img_pil:
         #                 # np.array(img_pil) 会在局部产生一个极小的临时数组
         #                 # 随后立即被覆写进巨型预分配内存 gt_video_B_T_H_W_C 中
         #                 # 这将大对象的内存分配次数直接降为 0
@@ -126,7 +157,11 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
             "gt_video": gt_video_B_T_H_W_C,
             "num_camera_views": self.num_camera_views,
             "tcp_state": tcp_state_B_T_D,
-            "max_cache_action": self.max_cache_action
+            "max_cache_action": self.max_cache_action,
+            "episode_id": self.episode_id,
+            "request_id": self.request_id,
+            "frame_ids": self.frame_ids,
+            "timestamps_ns": self.timestamps_ns,
         }
 
     @classmethod
@@ -136,7 +171,12 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
                         gt_video: np.ndarray,  # (B,Ts,H,W,3) uint8
                         num_camera_views: int = 1,
                         tcp_state: Optional[np.ndarray] = None,  # (B,2) float32
-                        max_cache_action: int = None
+                        max_cache_action: int = None,
+                        image_format: str = "JPEG",
+                        episode_id: Optional[str] = None,
+                        request_id: Optional[int] = None,
+                        frame_ids: Optional[List[int]] = None,
+                        timestamps_ns: Optional[List[int]] = None,
                         ) -> 'StepRequestFromEvaluator':
         """
 
@@ -150,10 +190,12 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
         instance = cls(
             instruction=instruction,
             stage_flag=stage_flag,
-            gt_video=cls.video_np_to_base64(gt_video),
+            gt_video=cls.video_np_to_base64(gt_video, image_format=image_format),
             num_camera_views=num_camera_views,
             tcp_state=None if tcp_state is None else tcp_state.tolist(),
             max_cache_action=max_cache_action,
+            episode_id=episode_id, request_id=request_id,
+            frame_ids=frame_ids, timestamps_ns=timestamps_ns,
         )
         return instance
 
@@ -169,14 +211,15 @@ class StepRequestFromEvaluator(pydantic.BaseModel):
         )
 
     @staticmethod
-    def video_np_to_base64(video: np.ndarray) -> List[List[str]]:
+    def video_np_to_base64(video: np.ndarray, image_format: str = "JPEG") -> List[List[str]]:
+        """Encode RGB frames; JPEG remains the default for existing clients."""
         assert video.ndim in [4, 5], f"video should be (B,Ts,H,W,3) or (Ts,H,W,3), got {video.shape}"
         assert video.dtype == np.uint8
 
         def image_to_base64(img_H_W_C) -> str:
             image_pil = Image.fromarray(img_H_W_C)
             image_bytes = io.BytesIO()
-            image_pil.save(image_bytes, format="JPEG")
+            image_pil.save(image_bytes, format=image_format)
             image_bytes = image_bytes.getvalue()
             image_base64 = base64.b64encode(image_bytes).decode("utf-8")
             return image_base64

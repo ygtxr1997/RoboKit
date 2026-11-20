@@ -673,6 +673,96 @@ class TCLDatasetHDF5(TCLDataset):
         return sample
 
 
+    def get_item_by_indices(self, indices: List[int]):
+        """Read a padded frame window; returned image buffers are reused."""
+        assert not self.is_img_decoded_in_h5, "get_item_by_indices only supports is_img_decoded_in_h5=False"
+
+        indices = list(indices)
+        if len(indices) == 0:
+            raise ValueError("indices should not be empty")
+
+        valid_positions = [i for i, idx in enumerate(indices) if idx is not None]
+        if len(valid_positions) == 0:
+            raise ValueError("indices should contain at least one valid index")
+
+        first_pos, last_pos = valid_positions[0], valid_positions[-1]
+        if any(idx is None for idx in indices[first_pos:last_pos + 1]):
+            raise ValueError("None is only allowed at the beginning or end of indices")
+
+        first_idx = int(indices[first_pos])
+        last_idx = int(indices[last_pos])
+        # Same padding: replace boundary None values with nearest valid frame.
+        padded_indices = [
+            first_idx if i < first_pos else last_idx if i > last_pos else int(idx)
+            for i, idx in enumerate(indices)
+        ]
+
+        def fill_image_cache(key, values):
+            if not hasattr(self, "_get_item_by_indices_image_cache"):
+                self._get_item_by_indices_image_cache = {}
+
+            first_value = np.asarray(values[0])
+            shape = (len(values), *first_value.shape)
+            cache = self._get_item_by_indices_image_cache.get(key)
+            if cache is None or cache.shape != shape or cache.dtype != first_value.dtype:
+                cache = np.empty(shape, dtype=first_value.dtype)
+                self._get_item_by_indices_image_cache[key] = cache
+
+            cache[0] = first_value
+            for i, value in enumerate(values[1:], start=1):
+                cache[i] = np.asarray(value)
+            # This intentionally returns a reusable buffer; copy it if it must outlive the next call.
+            return cache
+
+        def merge_samples(samples):
+            out = {}
+            for key in samples[0]:
+                kind = self.keys_config.get(key)
+                values = [sample[key] for sample in samples]
+                if kind in ("rgb", "depth"):
+                    out[key] = fill_image_cache(key, values)
+                elif kind == "string":
+                    out[key] = np.asarray(values)
+                else:
+                    out[key] = np.stack(values, axis=0)
+            return out
+
+        core_indices = [int(idx) for idx in indices[first_pos:last_pos + 1]]
+        is_contiguous = core_indices == list(range(core_indices[0], core_indices[-1] + 1))
+        if not self.dsets or not is_contiguous:
+            return merge_samples([self.__getitem__(idx) for idx in padded_indices])
+
+        start, end = core_indices[0], core_indices[-1] + 1
+        relative_indices = [idx - start for idx in padded_indices]
+        sample = {}
+
+        # HDF5 is fastest on one contiguous slice; gather padding repeats in memory.
+        for key in self.load_keys:
+            kind = self.keys_config[key]
+            data = self.dsets[key][start:end]
+
+            if kind == "string":
+                sample[key] = np.asarray([
+                    data[rel].decode('utf-8').strip() for rel in relative_indices
+                ])
+            elif kind in ("rgb", "depth"):
+                decoded_by_rel = {}
+                values = []
+                for rel in relative_indices:
+                    if rel not in decoded_by_rel:
+                        decoded_by_rel[rel] = np.array(self.binary_to_image(data[rel]))
+                    values.append(decoded_by_rel[rel])
+                sample[key] = fill_image_cache(key, values)
+            else:
+                sample[key] = data[relative_indices]
+
+        if "success" in self.dsets:
+            data = self.dsets["success"][start:end]
+            sample["success"] = data[relative_indices]
+
+        return sample
+
+
 if __name__ == "__main__":
     data_root = "/home/geyuan/local_soft/TCL/collected_data_0507"
 

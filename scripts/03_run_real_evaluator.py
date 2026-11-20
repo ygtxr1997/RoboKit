@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 import traceback
+import sys
 
 import roslibpy
 import yaml
@@ -98,19 +99,43 @@ def main(opts):
         state_fields=policy_config["state_fields"],
         expected_state_dim=policy_config.get("expected_state_dim"),
         force_fz_limit=control_config["force_fz_limit"],
+        record_policy=opts.record_policy,
     )
+    reason = "completed"
     try:
         evaluator.run()
     except Exception:
+        reason = "error"
         traceback.print_exc()
     except KeyboardInterrupt:
+        reason = "interrupted"
         print("用户按下 Ctrl+C，程序中断。")
     finally:
-        evaluator.stop()
+        try:
+            try:
+                evaluator.stop_recording_motion()
+            except Exception:
+                reason = 'error'
+                traceback.print_exc()
+            if gpu_connector.recording is not None and evaluator.recording_stop is not None:
+                result, note = 'unknown', ''
+                if sys.stdin.isatty() and reason != 'error':
+                    try:
+                        answer = input('Result [s=success / f=failure / Enter=unknown]: ').strip().lower()
+                        result = {'s': 'success', 'f': 'failure', 'success': 'success',
+                                  'failure': 'failure'}.get(answer, 'unknown')
+                        note = input('Note (optional): ').strip()
+                    except (EOFError, KeyboardInterrupt):
+                        pass
+                print(gpu_connector.recording.finish(evaluator.recording_stop,
+                    result=result, note=note, reason=reason))
+        finally:
+            evaluator.stop()
 
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser("03 Run Real Evaluator")
+    args.add_argument("--record-policy", action="store_true", help="Record timestamped policy views to the GPU HDF5 service")
     args.add_argument("--config", default=str(DEFAULT_CONFIG), help="Policy YAML configuration")
     args.add_argument("-p", "--port", default=5880, type=int, help="Port number of GPU connects")
     args.add_argument("-s", "--server", default="g7", type=str, help="Server name in remote GPU servers.")

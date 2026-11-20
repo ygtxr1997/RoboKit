@@ -20,17 +20,20 @@ class TimeProfiler:
         self._icur: Dict[str, float] = {}        # name  -> current step sum
         self._gcur: Dict[str, float] = {}        # group -> current step sum
 
-    def __call__(self, name: str, group: Optional[str] = None):
+    def __call__(self, name: str, group: Optional[str] = None, opening: bool = True):
         prof = self
 
         class _Ctx:
-            __slots__ = ("t0",)
+            __slots__ = ("t0", "active")
+
             def __enter__(self_):
-                if prof.enabled:
+                self_.active = prof.enabled and opening
+                if self_.active:
                     self_.t0 = time.perf_counter()
                 return self_
+
             def __exit__(self_, exc_type, exc, tb):
-                if not prof.enabled:
+                if not self_.active:
                     return False
                 dt = time.perf_counter() - self_.t0
                 prof._icur[name] = prof._icur.get(name, 0.0) + dt

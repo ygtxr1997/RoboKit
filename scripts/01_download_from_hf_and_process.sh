@@ -36,9 +36,30 @@ FILE_NAMES=(
 #"1201_coffee"
 #"1201_screw_bulb"
 #"1201_screw_bulb_turn_off"
+#"1201_screw_bulb_turn_off_table"
+#"1201_screw_bulb_turn_off_object"
+#"1201_screw_bulb_turn_off_light"
+
 #"0209_tower_boby"
 #"0209_tower_boby_hard"
-"0209_tower_boby_easy"
+#"0209_tower_boby_easy"
+
+#"0417_put_mouse"
+#"0417_ethernet"
+#"0417_greenyellowred"
+#"0417_test_tube"
+#"0417_french_press"
+#"0417_brush"
+#"0417_plastic_egg"
+#"0417_put_mouse_hard"
+
+#"260514_ethernet"
+#"1014_lh_tower_three_blocks"
+#"1014_insert_two_batteries"
+"1014_insert_two_batteries_marked"
+#"1014_lh_air_fryer"
+#"1029_lh_chemistry_turnoff"
+#"1029_lh_chemistry_turnon"
 )
 
 # 路径配置

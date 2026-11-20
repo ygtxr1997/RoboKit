@@ -39,9 +39,10 @@ python src/lerobot/datasets/v30/convert_dataset_v21_to_v30.py \
     --root=/path/to/local/dataset/directory
     --push-to-hub=false
 
-python convert_dataset_v21_to_v30.py \
-    --repo-id=cmu_stretch_lerobot \
-    --root=/home/geyuan/datasets/ipec_lerobot/fork \
+conda activate cosmos-predict2
+python -m robokit.datasets.lerobot.convert_dataset_v21_to_v30 \
+    --repo-id=fractal20220817_data_lerobot \
+    --root=/home/geyuan/datasets/ipec_lerobot \
     --push-to-hub=false
 ```
 

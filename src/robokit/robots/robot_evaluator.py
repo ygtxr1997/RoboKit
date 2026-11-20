@@ -68,7 +68,12 @@ class RealWorldEvaluator:
                  force_fz_limit: float = -7.5,
                  task_id: int = 0,
                  stop_during_inference: bool = True,
+                 record_policy: bool = False,
                  ):
+        self.record_policy = record_policy
+        self.pending_record = None
+        self.recording_stop = None
+        self.recording_window = []
         self.connector = gpu_service_connector
         self.robot = robot
         self.cur_task_text = cur_task_text
@@ -211,7 +216,22 @@ class RealWorldEvaluator:
         for _ in tqdm(range(self.camera_skipping), desc="Skipping frames:"):
             frame_obs = self.capture_env_observation()
 
+        if self.record_policy:
+            from robokit.connects.episode_recording import EpisodeUpload
+            if not self.connector.recording_capability:
+                response = self.connector.http_session.get(f'{self.connector.base_url}/init', timeout=120)
+                response.raise_for_status()
+                self.connector.recording_capability = response.json().get('recording')
+            if not self.connector.recording_capability:
+                raise ValueError('GPU service does not advertise recording support')
+            self.connector.recording = EpisodeUpload(self.connector.base_url,
+                dict(task_id=self.task_id, instruction=cur_task_text, state_fields=self.state_fields,
+                     command_layout='linear_xyz, angular_xyz, gripper_target',
+                     clock='evaluator UTC time_ns + monotonic_ns', image_encoding='JPEG'))
+
         while True:
+            if self.connector.recording is not None:
+                self.connector.recording.check()
             cycle_start_time = time.time()
             self.time_tick()
 
@@ -231,6 +251,16 @@ class RealWorldEvaluator:
             cur_gripper_rgb = resize_frame(frame_obs['gripper_rgb'])
             # cur_joint_state = frame_obs['robot_obs'].tolist()[7:13]  # Real joint_state
             cur_joint_state = self._build_policy_state(frame_obs)  # (D,) or None
+            if self.connector.recording is not None:
+                self.pending_record = dict(frame_id=self.step_cnt,
+                    timestamp_ns=frame_obs['timestamp_ns'], monotonic_ns=frame_obs['monotonic_ns'],
+                    image=cur_primary_rgb.copy(), gripper=cur_gripper_rgb.copy(),
+                    state=cur_joint_state.copy(), robot_state=frame_obs['robot_obs'].copy(),
+                    force=frame_obs['force'].copy(), policy_action=np.zeros(7, dtype=np.float32),
+                    command=np.zeros(7, dtype=np.float32), action_valid=0,
+                    action_timestamp_ns=0, request_id=-1, chunk_index=-1)
+                self.recording_window.append((self.step_cnt, frame_obs['timestamp_ns']))
+                self.recording_window = self.recording_window[-buffer_size:]
 
             # --- 更新帧缓存 ---
             with time_stat("[DEBUG] Frame Buffer Update"):
@@ -264,6 +294,8 @@ class RealWorldEvaluator:
                     gripper_rgb=self.frame_buffer['gripper_rgb'].get_ordered_stack()[None, :],
                     task_description=cur_task_text,
                     joint_state=joint_state,  # (B,T,D), or None for image-only policies
+                    frame_ids=[item[0] for item in self.recording_window],
+                    timestamps_ns=[item[1] for item in self.recording_window],
                 )
                 inference_time = time.time() - inference_start
                 max_inference_time = max(max_inference_time, inference_time)
@@ -283,6 +315,10 @@ class RealWorldEvaluator:
             # for h in range(action[0].shape[0]):
             #     action[0, h, 3] = 0.
             #     action[0, h, 4] = 0.
+
+            if self.pending_record is not None:
+                self.pending_record.update(policy_action=action[0, 0].copy(),
+                    request_id=self.connector.last_request_id, chunk_index=self.connector.last_chunk_index)
 
             # Fallback when force fz is too large
             fz = frame_obs['force'][2]
@@ -328,6 +364,9 @@ class RealWorldEvaluator:
                     if run_finished or self.stop_during_inference:
                         self._stop_jog()
             self.action_saver.add_action(action[0, 0, :])
+            if self.pending_record is not None:
+                self.connector.recording.add(self.pending_record)
+                self.pending_record = None
 
             execution_time = time.time() - execution_start
             total_cycle_time = time.time() - cycle_start_time
@@ -429,6 +468,8 @@ class RealWorldEvaluator:
             camera_data = self.camera.capture_frames()
 
         env_obs_dict = {
+            "timestamp_ns": time.time_ns(),
+            "monotonic_ns": time.monotonic_ns(),
             "primary_rgb": camera_data['color1'],
             "gripper_rgb": camera_data['color2'],
             "primary_depth": camera_data['depth1'],
@@ -472,10 +513,14 @@ class RealWorldEvaluator:
                 self.g = target_g_binary
                 self._last_g_change_step = self.step_cnt
 
+        command_timestamp_ns = time.time_ns()
         self.robot.lin_ang_jog_pub(
             linear_xyz,
             angular_xyz,
         )
+        if self.pending_record is not None:
+            self.pending_record.update(command=np.asarray(action[:6] + [self.g], dtype=np.float32),
+                action_timestamp_ns=command_timestamp_ns, action_valid=1)
 
     def on_gripper_move(self, g: float = None) -> None:
         self.g = g if g is not None else self.g
@@ -499,6 +544,18 @@ class RealWorldEvaluator:
         """Clear arm jog commands while preserving the gripper target."""
         zero = dict(x=0.0, y=0.0, z=0.0)
         self.robot.lin_ang_jog_pub(zero, zero)
+
+    def stop_recording_motion(self):
+        """Stop immediately and freeze the episode end before operator input."""
+        self._stop_jog()
+        if self.recording_stop is None:
+            self.recording_stop = dict(stop_timestamp_ns=time.time_ns(),
+                                       stop_monotonic_ns=time.monotonic_ns())
+        if self.pending_record is not None:
+            self.connector.recording.add(self.pending_record)
+            self.pending_record = None
+        if self.connector.recording is not None:
+            self.connector.recording.drain()
 
     def stop(self):
         ## Just for coffee task

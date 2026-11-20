@@ -23,6 +23,12 @@ python -m lerobot.datasets.v21.convert_dataset_v20_to_v21 \
     --repo-id=aliberts/koch_tutorial \
     --root=/path/to/local/dataset/directory \
     --push-to-hub=false
+
+conda activate lerobot0.3.3
+python -m robokit.datasets.lerobot.convert_dataset_v20_to_v21_local \
+    --repo-id=bridge_orig_lerobot \
+    --root=/home/geyuan/datasets/ipec_lerobot/ \
+    --push-to-hub=false
 ```
 """
 
